@@ -16,6 +16,8 @@ pub enum Keyword {
     Impl,
     In,
     Else,
+    Continue,
+    Break,
 }
 
 impl fmt::Display for Keyword {
@@ -33,6 +35,8 @@ impl fmt::Display for Keyword {
             Keyword::Impl => write!(f, "impl"),
             Keyword::In => write!(f, "in"),
             Keyword::Else => write!(f, "else"),
+            Keyword::Continue => write!(f, "continue"),
+            Keyword::Break => write!(f, "break"),
         }
     }
 }
@@ -480,6 +484,8 @@ impl<'src> Lexer<'src> {
                             "impl" => TokenKind::Keyword(Keyword::Impl),
                             "in" => TokenKind::Keyword(Keyword::In),
                             "else" => TokenKind::Keyword(Keyword::Else),
+                            "continue" => TokenKind::Keyword(Keyword::Continue),
+                            "break" => TokenKind::Keyword(Keyword::Break),
                             _ => TokenKind::Ident(identifier),
                         },
                         Some(Span::from((start, self.pos))),

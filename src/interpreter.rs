@@ -148,15 +148,40 @@ impl<'src> Interpreter<'src> {
                     source: self.code,
                 })
             }
-            ExprKind::Assign { target, value } => {
-                let val = self.eval_expr(value, env)?;
+            ExprKind::Assign { op, target, value } => {
+                let right_val = self.eval_expr(value, env)?;
+
                 if let ExprKind::Ident(name) = &target.value {
-                    env.assign(name, val.clone()).map_err(|msg| BunError {
+                    let final_val = if *op == TokenKind::Equals {
+                        right_val
+                    } else {
+                        let current_val = env.get(name).ok_or_else(|| BunError {
+                            message: format!("Undefined variable '{}'", name),
+                            span: target.span,
+                            source: self.code,
+                        })?;
+
+                        let res = match op {
+                            TokenKind::PlusEquals => current_val + right_val,
+                            TokenKind::MinusEquals => current_val - right_val,
+                            TokenKind::StarEquals => current_val * right_val,
+                            TokenKind::SlashEquals => current_val / right_val,
+                            TokenKind::PercentEquals => current_val % right_val,
+                            _ => Err(format!("Unsupported assignment operator '{:?}'", op)),
+                        };
+
+                        res.map_err(|msg| BunError {
+                            message: msg,
+                            span: expr.span,
+                            source: self.code,
+                        })?
+                    };
+                    env.assign(name, final_val.clone()).map_err(|msg| BunError {
                         message: msg,
                         span: target.span,
                         source: self.code,
                     })?;
-                    Ok(val)
+                    Ok(final_val)
                 } else {
                     Err(BunError {
                         message: "Invalid assignment target".to_string(),
@@ -180,15 +205,27 @@ impl<'src> Interpreter<'src> {
                 Ok(last_val)
             }
             ExprKind::Call { path, args } => {
-                let func_name = path.join("::");
-                if func_name == "io::println" {
-                    for arg in args {
-                        let val = self.eval_expr(arg, env)?;
-                        print!("{}", val);
+                if path[0] == "io" {
+                    match path[1].as_str() {
+                        "println" => {
+                            for arg in args {
+                                let val = self.eval_expr(arg, env)?;
+                                print!("{}", val);
+                            }
+                            println!();
+                            return Ok(Value::Unit);
+                        }
+                        "print" => {
+                            for arg in args {
+                                let val = self.eval_expr(arg, env)?;
+                                print!("{}", val);
+                            }
+                            return Ok(Value::Unit);
+                        }
+                        &_ => {}
                     }
-                    println!();
-                    return Ok(Value::Unit);
                 }
+                let func_name = path.join("::");
                 Err(BunError {
                     message: format!("Unknown function '{}'", func_name),
                     span: expr.span,

@@ -24,6 +24,7 @@ pub enum ExprKind {
         args: Vec<Expr>,
     },
     Assign {
+        op: TokenKind,
         target: Box<Expr>,
         value: Box<Expr>,
     },
@@ -100,7 +101,7 @@ pub struct Program {
 #[derive(Debug, PartialEq, PartialOrd, Clone)]
 enum Precedence {
     None = 0,
-    Assignment, // =
+    Assignment, // = += -= *= /= %=
     Range,      // ..
     Or,         // ||
     And,        // &&
@@ -118,7 +119,12 @@ enum Precedence {
 impl Precedence {
     pub fn from_token(kind: &TokenKind) -> Self {
         match kind {
-            TokenKind::Equals => Precedence::Assignment,
+            TokenKind::Equals
+            | TokenKind::PlusEquals
+            | TokenKind::MinusEquals
+            | TokenKind::StarEquals
+            | TokenKind::SlashEquals
+            | TokenKind::PercentEquals => Precedence::Assignment,
             TokenKind::DotDot => Precedence::Range,
             TokenKind::Or => Precedence::Or,
             TokenKind::And => Precedence::And,
@@ -445,12 +451,19 @@ impl<'src> Parser<'src> {
                     span,
                 ))
             }
-            TokenKind::Equals => {
+            TokenKind::Equals
+            | TokenKind::PlusEquals
+            | TokenKind::MinusEquals
+            | TokenKind::StarEquals
+            | TokenKind::SlashEquals
+            | TokenKind::PercentEquals => {
                 let right = self.parse_expr(Precedence::Assignment)?;
                 let span = Span::from((left.span.start, right.span.end));
+
                 match left.value {
                     ExprKind::Ident(_) | ExprKind::FieldAccess { .. } => Ok(Expr::new_span(
                         ExprKind::Assign {
+                            op: op_tok.value.clone(),
                             target: Box::new(left),
                             value: Box::new(right),
                         },
