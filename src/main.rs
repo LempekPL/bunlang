@@ -19,7 +19,7 @@ fn main() {
         exit(0);
     }
     // dbg!(&expr);
-    let response = Interpreter::run(expr.unwrap(), &code);
+    let response = Interpreter::new(expr.unwrap(), &code).run();
     if let Err(err) = response {
         println!("{}", err);
         exit(0);

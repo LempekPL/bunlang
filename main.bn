@@ -12,7 +12,9 @@
 //  y: f64
 // }
 //
-
+fn trolujN(a) {
+    io::println("troluje ", a, " razy");
+}
 
 fn main() {
     let a = 10;
@@ -27,22 +29,13 @@ fn main() {
         io::println("spierdalaj ", a);
     }
     let i = 0;
-    while i < 100 {
-        io::print(i, ". ");
-        if i % 3 == 0 && i % 5 == 0 {
-            io::print("baz");
-        } else if i % 3 == 0 {
-            io::print("foo");
-        } else {
-            i += 2;
-            io::println();
-            continue;
-        }
-        if (i - 1) == 10 {
-            break;
-        }
+    let a = "królik";
+    let ilosc = io::read();
+    while i < 10 {
+        io::println(i, ". " + a);
+        trolujN(i);
+        trolujN(ilosc);
         i += 1;
-        io::println();
     }
     // c::test()
 }

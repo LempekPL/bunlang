@@ -21,6 +21,17 @@ impl Value {
             _ => Err("Expected boolean condition, but found a different type".to_string()),
         }
     }
+
+    pub fn get_type_name(&self) -> &'static str {
+        match self {
+            Value::F64(_) => "Number",
+            Value::String(_) => "String",
+            Value::Bool(_) => "Bool",
+            Value::Range(_, _) => "Range",
+            Value::Unit => "Unit",
+            Value::Struct(_) => "Struct",
+        }
+    }
 }
 
 impl Display for Value {

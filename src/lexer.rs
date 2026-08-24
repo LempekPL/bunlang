@@ -18,6 +18,7 @@ pub enum Keyword {
     Else,
     Continue,
     Break,
+    Return,
 }
 
 impl fmt::Display for Keyword {
@@ -37,6 +38,7 @@ impl fmt::Display for Keyword {
             Keyword::Else => write!(f, "else"),
             Keyword::Continue => write!(f, "continue"),
             Keyword::Break => write!(f, "break"),
+            Keyword::Return => write!(f, "return"),
         }
     }
 }
@@ -486,6 +488,7 @@ impl<'src> Lexer<'src> {
                             "else" => TokenKind::Keyword(Keyword::Else),
                             "continue" => TokenKind::Keyword(Keyword::Continue),
                             "break" => TokenKind::Keyword(Keyword::Break),
+                            "return" => TokenKind::Keyword(Keyword::Return),
                             _ => TokenKind::Ident(identifier),
                         },
                         Some(Span::from((start, self.pos))),

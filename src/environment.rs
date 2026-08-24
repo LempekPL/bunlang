@@ -30,9 +30,18 @@ impl Environment {
     }
 
     pub fn assign(&mut self, name: &str, val: Value) -> Result<(), String> {
-        if self.vars.contains_key(name) {
-            self.vars.insert(name.to_string(), val);
-            Ok(())
+        if let Some(existing) = self.vars.get(name) {
+            if std::mem::discriminant(existing) == std::mem::discriminant(&val) {
+                self.vars.insert(name.to_string(), val);
+                Ok(())
+            } else {
+                Err(format!(
+                    "Type mismatch: cannot assign type '{}' to variable '{}' of type '{}'",
+                    val.get_type_name(),
+                    name,
+                    existing.get_type_name()
+                ))
+            }
         } else if let Some(parent) = &mut self.parent {
             parent.assign(name, val)
         } else {

@@ -5,6 +5,9 @@ use std::collections::HashMap;
 
 #[derive(Debug)]
 pub enum ExprKind {
+    Break,
+    Continue,
+    Return,
     Literal(TokenKind),
     Ident(String),
     Binary {
@@ -72,7 +75,7 @@ pub type Stmt = Locatable<StmtKind>;
 pub enum ItemKind {
     FnDeclare {
         name: String,
-        inputs: Vec<Expr>,
+        inputs: Vec<String>,
         block: Expr,
     },
     // StructDeclare {
@@ -167,13 +170,26 @@ impl<'src> Parser<'src> {
                     self.next_token();
                     let ident = self.take_ident()?;
                     self.consume(TokenKind::LeftParen)?;
-                    // todo: implement input
+                    let mut inputs = Vec::new();
+                    if self.current_inside() != Some(TokenKind::RightParen) {
+                        // todo: implement input types
+                        loop {
+                            inputs.push(self.take_ident()?);
+                            if self.current_inside() == Some(TokenKind::RightParen) {
+                                break;
+                            }
+                            self.consume(TokenKind::Comma)?;
+                            if self.current_inside() == Some(TokenKind::RightParen) {
+                                break;
+                            }
+                        }
+                    }
                     self.consume(TokenKind::RightParen)?;
                     let stmts = self.parse_stmts()?;
                     let span = Span::from((start, stmts.span.end));
                     let fun = ItemKind::FnDeclare {
                         name: ident.clone(),
-                        inputs: vec![],
+                        inputs,
                         block: stmts,
                     };
                     items.insert(ident, Item::new_span(fun, span));
@@ -258,6 +274,10 @@ impl<'src> Parser<'src> {
         })?;
 
         match &tok.value {
+            TokenKind::Keyword(Keyword::Break) => Ok(Expr::new_span(ExprKind::Break, tok.span)),
+            TokenKind::Keyword(Keyword::Continue) => {
+                Ok(Expr::new_span(ExprKind::Continue, tok.span))
+            }
             TokenKind::Number(_) | TokenKind::String(_) => Ok(Expr::new_span(
                 ExprKind::Literal(tok.value.clone()),
                 tok.span,
@@ -528,8 +548,15 @@ impl<'src> Parser<'src> {
         self.tokens.get(self.i + 1)
     }
 
+    fn peek_inside(&self) -> Option<TokenKind> {
+        self.tokens.get(self.i + 1).map(|tok| tok.value.clone())
+    }
+
     fn current(&self) -> Option<&Token> {
         self.tokens.get(self.i)
+    }
+    fn current_inside(&self) -> Option<TokenKind> {
+        self.tokens.get(self.i).map(|tok| tok.value.clone())
     }
 
     fn next_token(&mut self) -> Option<&Token> {

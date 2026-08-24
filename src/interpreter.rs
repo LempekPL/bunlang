@@ -6,45 +6,65 @@ use crate::parser::{Expr, ExprKind, Item, ItemKind, Stmt, StmtKind};
 pub(crate) use crate::value::Value;
 use std::cmp::Ordering;
 use std::collections::HashMap;
+use std::io;
+
+#[derive(Debug)]
+pub enum ControlFlow<'src> {
+    Error(BunError<'src>),
+    Break,
+    Continue,
+}
+
+impl<'src> From<BunError<'src>> for ControlFlow<'src> {
+    fn from(err: BunError<'src>) -> Self {
+        ControlFlow::Error(err)
+    }
+}
 
 pub struct Interpreter<'src> {
+    items: HashMap<String, Item>,
     code: &'src str,
 }
 
 impl<'src> Interpreter<'src> {
-    pub fn new(code: &'src str) -> Self {
-        Self { code }
+    pub fn new(items: HashMap<String, Item>, code: &'src str) -> Self {
+        Self { items, code }
     }
 
-    pub fn run(items: HashMap<String, Item>, code: &'src str) -> Result<(), BunError<'src>> {
-        let interpreter = Interpreter::new(code);
+    pub fn run(&mut self) -> Result<(), BunError<'src>> {
         let mut global_env = Environment::new(None);
 
-        let block = if let Some(Item {
+        let Some(Item {
             value: ItemKind::FnDeclare { block, .. },
             ..
-        }) = items.get("main")
-        {
-            interpreter.eval_expr(block, &mut global_env)?;
-        } else {
+        }) = self.items.get("main")
+        else {
             return Err(BunError {
                 message: "Function 'main' not found".into(),
                 span: Span::default(),
-                source: code,
+                source: self.code,
             });
         };
+        self.eval_block(block, &mut global_env)?;
         Ok(())
     }
 
-    pub fn eval_expr(&self, expr: &Expr, env: &mut Environment) -> Result<Value, BunError<'src>> {
+    pub fn eval_expr(
+        &self,
+        expr: &Expr,
+        env: &mut Environment,
+    ) -> Result<Value, ControlFlow<'src>> {
         match &expr.value {
             ExprKind::Literal(TokenKind::Bool(b)) => Ok(Value::Bool(*b)),
             ExprKind::Literal(TokenKind::Number(n)) => Ok(Value::F64(*n)),
             ExprKind::Literal(TokenKind::String(s)) => Ok(Value::String(s.clone())),
-            ExprKind::Ident(name) => env.get(name).ok_or_else(|| BunError {
-                message: format!("Undefined variable '{}'", name),
-                span: expr.span,
-                source: self.code,
+            ExprKind::Ident(name) => env.get(name).ok_or_else(|| {
+                BunError {
+                    message: format!("Undefined variable '{}'", name),
+                    span: expr.span,
+                    source: self.code,
+                }
+                .into()
             }),
             ExprKind::Unary {
                 op,
@@ -56,10 +76,13 @@ impl<'src> Interpreter<'src> {
                     TokenKind::Not => !val,
                     _ => Err(format!("Unsupported unary operator '{:?}'", op)),
                 };
-                res.map_err(|msg| BunError {
-                    message: msg,
-                    span: expr.span,
-                    source: self.code,
+                res.map_err(|msg| {
+                    BunError {
+                        message: msg,
+                        span: expr.span,
+                        source: self.code,
+                    }
+                    .into()
                 })
             }
             ExprKind::Binary { op, left, right } => {
@@ -138,14 +161,18 @@ impl<'src> Interpreter<'src> {
                             message: format!("Unsupported binary operator '{:?}'", op),
                             span: expr.span,
                             source: self.code,
-                        });
+                        }
+                        .into());
                     }
                 };
 
-                res.map_err(|msg| BunError {
-                    message: msg,
-                    span: expr.span,
-                    source: self.code,
+                res.map_err(|msg| {
+                    BunError {
+                        message: msg,
+                        span: expr.span,
+                        source: self.code,
+                    }
+                    .into()
                 })
             }
             ExprKind::Assign { op, target, value } => {
@@ -176,31 +203,44 @@ impl<'src> Interpreter<'src> {
                             source: self.code,
                         })?
                     };
-                    env.assign(name, final_val.clone()).map_err(|msg| BunError {
-                        message: msg,
-                        span: target.span,
-                        source: self.code,
-                    })?;
+                    env.assign(name, final_val.clone())
+                        .map_err(|msg| BunError {
+                            message: msg,
+                            span: target.span,
+                            source: self.code,
+                        })?;
                     Ok(final_val)
                 } else {
                     Err(BunError {
                         message: "Invalid assignment target".to_string(),
                         span: target.span,
                         source: self.code,
-                    })
+                    }
+                    .into())
                 }
             }
             ExprKind::Block { stmts } => {
                 let parent_env = std::mem::replace(env, Environment::new(None));
                 let mut block_env = Environment::new(Some(parent_env));
                 let mut last_val = Value::Unit;
+                let mut flow_err = None;
                 for stmt in stmts {
-                    last_val = self.eval_stmt(stmt, &mut block_env)?;
+                    match self.eval_stmt(stmt, &mut block_env) {
+                        Ok(val) => last_val = val,
+                        Err(e) => {
+                            flow_err = Some(e);
+                            break;
+                        }
+                    }
                 }
                 *env = block_env
                     .parent
                     .map(|p| *p)
                     .unwrap_or(Environment::new(None));
+
+                if let Some(err) = flow_err {
+                    return Err(err);
+                }
 
                 Ok(last_val)
             }
@@ -222,15 +262,59 @@ impl<'src> Interpreter<'src> {
                             }
                             return Ok(Value::Unit);
                         }
-                        &_ => {}
+                        "read" => {
+                            if args.len() > 1 {
+                                return Err(BunError {
+                                    message: "Read doesn't take more than 0 arguments".to_string(),
+                                    span: expr.span,
+                                    source: self.code,
+                                }
+                                .into());
+                            }
+                            let mut input = String::new();
+                            io::stdin().read_line(&mut input).expect("Failed to read input");
+                            return Ok(Value::String(input.trim_end().to_string()));
+                        }
+                        _ => {}
                     }
+                }
+                if let Some(func_name) = path.last()
+                    && let Some(func_item) = self.items.get(func_name)
+                {
+                    match &func_item.value {
+                        ItemKind::FnDeclare {
+                            inputs,
+                            block,
+                            ..
+                        } => {
+                            if args.len() != inputs.len() {
+                                return Err(BunError {
+                                    message: format!(
+                                        "Function '{}' expects {} arguments, but got {}",
+                                        func_name,
+                                        inputs.len(),
+                                        args.len()
+                                    ),
+                                    span: expr.span,
+                                    source: self.code,
+                                }
+                                    .into());
+                            }
+                            let mut func_env = Environment::new(None);
+                            for (input_name, args) in inputs.iter().zip(args) {
+                                func_env.define(input_name, self.eval_expr(args, env)?);
+                            }
+                            return self.eval_block(block, &mut func_env).map_err(|e| e.into());
+                        }
+                    };
                 }
                 let func_name = path.join("::");
                 Err(BunError {
                     message: format!("Unknown function '{}'", func_name),
                     span: expr.span,
                     source: self.code,
-                })
+                }
+                .into())
             }
             ExprKind::If {
                 condition,
@@ -268,7 +352,12 @@ impl<'src> Interpreter<'src> {
                     if !is_true {
                         break;
                     }
-                    last_val = self.eval_expr(body, env)?;
+                    match self.eval_expr(body, env) {
+                        Ok(val) => last_val = val,
+                        Err(ControlFlow::Break) => break,
+                        Err(ControlFlow::Continue) => continue,
+                        Err(err) => return Err(err),
+                    }
                 }
 
                 Ok(last_val)
@@ -313,15 +402,22 @@ impl<'src> Interpreter<'src> {
             //         })
             //     }
             // }
+            ExprKind::Break => return Err(ControlFlow::Break),
+            ExprKind::Continue => return Err(ControlFlow::Continue),
             _ => Err(BunError {
                 message: "Expression not implemented in interpreter yet".to_string(),
                 span: expr.span,
                 source: self.code,
-            }),
+            }
+            .into()),
         }
     }
 
-    pub fn eval_stmt(&self, stmt: &Stmt, env: &mut Environment) -> Result<Value, BunError<'src>> {
+    pub fn eval_stmt(
+        &self,
+        stmt: &Stmt,
+        env: &mut Environment,
+    ) -> Result<Value, ControlFlow<'src>> {
         match &stmt.value {
             StmtKind::Declare { name, expr } => {
                 let val = self.eval_expr(expr, env)?;
@@ -329,6 +425,23 @@ impl<'src> Interpreter<'src> {
                 Ok(Value::Unit)
             }
             StmtKind::Expr(expr) => self.eval_expr(expr, env),
+        }
+    }
+
+    pub fn eval_block(&self, block: &Expr, env: &mut Environment) -> Result<Value, BunError<'src>> {
+        match self.eval_expr(block, env) {
+            Ok(value) => Ok(value),
+            Err(ControlFlow::Error(err)) => Err(err),
+            Err(ControlFlow::Break) => Err(BunError {
+                message: "Cannot use 'break' outside of a loop".into(),
+                span: block.span,
+                source: self.code,
+            }),
+            Err(ControlFlow::Continue) => Err(BunError {
+                message: "Cannot use 'continue' outside of a loop".into(),
+                span: block.span,
+                source: self.code,
+            }),
         }
     }
 }
