@@ -28,6 +28,20 @@ pub enum ExprKind {
         value: Box<Expr>,
     },
     QualifiedIdent(Vec<String>),
+    If {
+        condition: Box<Expr>,
+        truthy: Box<Expr>,
+        falsy: Option<Box<Expr>>,
+    },
+    While {
+        condition: Box<Expr>,
+        body: Box<Expr>,
+    },
+    For {
+        item: String,
+        iterable: Box<Expr>,
+        body: Box<Expr>,
+    },
     StructInit {
         name: String,
         fields: Vec<(String, Box<Expr>)>,
@@ -87,6 +101,7 @@ pub struct Program {
 enum Precedence {
     None = 0,
     Assignment, // =
+    Range,      // ..
     Or,         // ||
     And,        // &&
     BitOr,      // |
@@ -104,6 +119,7 @@ impl Precedence {
     pub fn from_token(kind: &TokenKind) -> Self {
         match kind {
             TokenKind::Equals => Precedence::Assignment,
+            TokenKind::DotDot => Precedence::Range,
             TokenKind::Or => Precedence::Or,
             TokenKind::And => Precedence::And,
             TokenKind::BitOr => Precedence::BitOr,
@@ -190,7 +206,16 @@ impl<'src> Parser<'src> {
                 TokenKind::RightBrace => break,
                 _ => {
                     let expr = self.parse_expr(Precedence::None)?;
-                    self.consume(TokenKind::Semicolon)?;
+                    let requires_semi = match &expr.value {
+                        ExprKind::If { .. }
+                        | ExprKind::While { .. }
+                        | ExprKind::For { .. }
+                        | ExprKind::Block { .. } => false,
+                        _ => true,
+                    };
+                    if requires_semi {
+                        self.consume(TokenKind::Semicolon)?;
+                    }
                     let span = Span::from((stmt_start, self.span.end));
                     stmts.push(Stmt::new_span(StmtKind::Expr(expr), span));
                 }
@@ -262,6 +287,65 @@ impl<'src> Parser<'src> {
                 self.consume(TokenKind::RightParen)?;
                 Ok(expr)
             }
+            TokenKind::Keyword(Keyword::If) => {
+                let start = tok.span.start;
+                let condition = self.parse_expr(Precedence::None)?;
+                let truthy = self.parse_stmts()?;
+                let mut falsy = None;
+                if self
+                    .current()
+                    .is_some_and(|t| t.value == TokenKind::Keyword(Keyword::Else))
+                {
+                    self.next_token();
+                    if self
+                        .current()
+                        .is_some_and(|t| t.value == TokenKind::Keyword(Keyword::If))
+                    {
+                        falsy = Some(Box::new(self.parse_expr(Precedence::None)?));
+                    } else {
+                        falsy = Some(Box::new(self.parse_stmts()?));
+                    }
+                }
+
+                let span = Span::from((start, self.span.end));
+                Ok(Expr::new_span(
+                    ExprKind::If {
+                        condition: Box::new(condition),
+                        truthy: Box::new(truthy),
+                        falsy,
+                    },
+                    span,
+                ))
+            }
+            TokenKind::Keyword(Keyword::While) => {
+                let start = tok.span.start;
+                let condition = self.parse_expr(Precedence::None)?;
+                let body = self.parse_stmts()?;
+                let span = Span::from((start, self.span.end));
+                Ok(Expr::new_span(
+                    ExprKind::While {
+                        condition: Box::new(condition),
+                        body: Box::new(body),
+                    },
+                    span,
+                ))
+            }
+            TokenKind::Keyword(Keyword::For) => {
+                let start = tok.span.start;
+                let item = self.take_ident()?;
+                self.consume(TokenKind::Keyword(Keyword::In))?;
+                let iterable = self.parse_expr(Precedence::None)?;
+                let body = self.parse_stmts()?;
+                let span = Span::from((start, self.span.end));
+                Ok(Expr::new_span(
+                    ExprKind::For {
+                        item,
+                        iterable: Box::new(iterable),
+                        body: Box::new(body),
+                    },
+                    span,
+                ))
+            }
             other => Err(BunError {
                 message: format!("Expected expression, found '{}'", other),
                 span: tok.span,
@@ -278,23 +362,6 @@ impl<'src> Parser<'src> {
         })?;
 
         match &op_tok.value {
-            TokenKind::Plus
-            | TokenKind::Minus
-            | TokenKind::Star
-            | TokenKind::Slash
-            | TokenKind::Percent => {
-                let precedence = Precedence::from_token(&op_tok.value);
-                let right = self.parse_expr(precedence)?;
-                let span = Span::from((left.span.start, right.span.end));
-                Ok(Expr::new_span(
-                    ExprKind::Binary {
-                        op: op_tok.value.clone(),
-                        left: Box::new(left),
-                        right: Box::new(right),
-                    },
-                    span,
-                ))
-            }
             TokenKind::LeftParen => {
                 let mut args = Vec::new();
                 while let Some(arg_tok) = self.current() {
@@ -365,19 +432,30 @@ impl<'src> Parser<'src> {
                     ))
                 }
             }
+            TokenKind::DotDot => {
+                let precedence = Precedence::from_token(&op_tok.value);
+                let right = self.parse_expr(precedence)?;
+                let span = Span::from((left.span.start, right.span.end));
+                Ok(Expr::new_span(
+                    ExprKind::Binary {
+                        op: op_tok.value.clone(),
+                        left: Box::new(left),
+                        right: Box::new(right),
+                    },
+                    span,
+                ))
+            }
             TokenKind::Equals => {
                 let right = self.parse_expr(Precedence::Assignment)?;
                 let span = Span::from((left.span.start, right.span.end));
                 match left.value {
-                    ExprKind::Ident(_) | ExprKind::FieldAccess { .. } => {
-                        Ok(Expr::new_span(
-                            ExprKind::Assign {
-                                target: Box::new(left),
-                                value: Box::new(right),
-                            },
-                            span,
-                        ))
-                    }
+                    ExprKind::Ident(_) | ExprKind::FieldAccess { .. } => Ok(Expr::new_span(
+                        ExprKind::Assign {
+                            target: Box::new(left),
+                            value: Box::new(right),
+                        },
+                        span,
+                    )),
                     _ => Err(BunError {
                         message: "Invalid assignment target".to_string(),
                         span: left.span,
@@ -385,8 +463,18 @@ impl<'src> Parser<'src> {
                     }),
                 }
             }
-            _ => {
-                unreachable!("Operator missing in parse_infix")
+            op => {
+                let precedence = Precedence::from_token(op);
+                let right = self.parse_expr(precedence)?;
+                let span = Span::from((left.span.start, right.span.end));
+                Ok(Expr::new_span(
+                    ExprKind::Binary {
+                        op: op.clone(),
+                        left: Box::new(left),
+                        right: Box::new(right),
+                    },
+                    span,
+                ))
             }
         }
     }

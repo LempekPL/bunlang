@@ -16,8 +16,19 @@
 
 fn main() {
     let a = 10;
-    let b = a / 2;
-    a = a + b;
-    io::println(a);
+    let b = a * 2;
+    a = a + (b * 100);
+    a += 1;
+    if a > 18 {
+        io::println("jepi ", a);
+    } else if a == 18 {
+        io::println("prawie ", a);
+    } else {
+        io::println("spierdalaj ", a);
+    }
+    for i in 0..10 {
+        io::println(i, ". lol");
+        i -= 1;
+    }
     // c::test()
 }

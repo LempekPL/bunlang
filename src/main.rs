@@ -18,13 +18,13 @@ fn main() {
         println!("{}", err);
         exit(0);
     }
-    dbg!(&expr);
+    // dbg!(&expr);
     let response = Interpreter::run(expr.unwrap(), &code);
     if let Err(err) = response {
         println!("{}", err);
         exit(0);
     }
-    if let Ok(res) = response && res != Value::Unit {
-        println!("{:?}", res);
-    }
+    // if let Ok(res) = response && res != Value::Unit {
+    //     println!("{:?}", res);
+    // }
 }

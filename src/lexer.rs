@@ -14,6 +14,8 @@ pub enum Keyword {
     Struct,
     Enum,
     Impl,
+    In,
+    Else,
 }
 
 impl fmt::Display for Keyword {
@@ -29,6 +31,8 @@ impl fmt::Display for Keyword {
             Keyword::Struct => write!(f, "struct"),
             Keyword::Enum => write!(f, "enum"),
             Keyword::Impl => write!(f, "impl"),
+            Keyword::In => write!(f, "in"),
+            Keyword::Else => write!(f, "else"),
         }
     }
 }
@@ -69,6 +73,7 @@ pub enum TokenKind {
     ColonColon,
     Colon,
     Dot,
+    DotDot,
     And,
     Or,
     BitAnd,
@@ -98,6 +103,7 @@ impl fmt::Display for TokenKind {
             Self::Semicolon => write!(f, ";"),
             Self::Comma => write!(f, ","),
             Self::Dot => write!(f, "."),
+            Self::DotDot => write!(f, ".."),
             Self::Colon => write!(f, ":"),
             Self::ColonColon => write!(f, "::"),
             Self::LessEquals => write!(f, "<="),
@@ -324,6 +330,15 @@ impl<'src> Lexer<'src> {
                         self.push_token(TokenKind::BitOr, None);
                     }
                 }
+                '.' => {
+                    if chars.peek() == Some(&'.') {
+                        let start = self.pos;
+                        self.bump(chars.next().unwrap());
+                        self.push_token(TokenKind::DotDot, Some(Span::from((start, self.pos))));
+                    } else {
+                        self.push_token(TokenKind::Dot, None);
+                    }
+                }
                 '^' => self.push_token(TokenKind::BitXor, None),
                 '%' => self.push_token(TokenKind::Percent, None),
                 '(' => self.push_token(TokenKind::LeftParen, None),
@@ -332,7 +347,6 @@ impl<'src> Lexer<'src> {
                 '}' => self.push_token(TokenKind::RightBrace, None),
                 ';' => self.push_token(TokenKind::Semicolon, None),
                 ',' => self.push_token(TokenKind::Comma, None),
-                '.' => self.push_token(TokenKind::Dot, None),
                 ':' => {
                     if chars.peek() == Some(&':') {
                         let start = self.pos;
@@ -464,6 +478,8 @@ impl<'src> Lexer<'src> {
                             "struct" => TokenKind::Keyword(Keyword::Struct),
                             "enum" => TokenKind::Keyword(Keyword::Enum),
                             "impl" => TokenKind::Keyword(Keyword::Impl),
+                            "in" => TokenKind::Keyword(Keyword::In),
+                            "else" => TokenKind::Keyword(Keyword::Else),
                             _ => TokenKind::Ident(identifier),
                         },
                         Some(Span::from((start, self.pos))),
