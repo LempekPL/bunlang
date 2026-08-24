@@ -1,0 +1,3 @@
+fn lolek() {
+    io::println("lokikoniczynka");
+}

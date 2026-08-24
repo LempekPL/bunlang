@@ -65,7 +65,14 @@ pub type Expr = Locatable<ExprKind>;
 
 #[derive(Debug)]
 pub enum StmtKind {
-    Declare { name: String, expr: Expr },
+    Declare {
+        name: String,
+        expr: Expr,
+    },
+    Use {
+        path: Vec<String>,
+        alias: Option<String>,
+    },
     Expr(Expr),
 }
 
@@ -78,6 +85,21 @@ pub enum ItemKind {
         inputs: Vec<String>,
         block: Expr,
     },
+    Const {
+        name: String,
+        value: Expr,
+    },
+    Use {
+        path: Vec<String>,
+        alias: Option<String>,
+    },
+    ModImport {
+        name: String,
+        path: String,
+    },
+    Mod {
+        items: Vec<Item>,
+    }
     // StructDeclare {
     //     name: String,
     //     fields: Vec<(String, Type)>,
@@ -194,6 +216,59 @@ impl<'src> Parser<'src> {
                     };
                     items.insert(ident, Item::new_span(fun, span));
                 }
+                TokenKind::Keyword(Keyword::Use) => {
+                    let start = tok.span.start;
+                    self.next_token();
+                    let mut path = vec![self.take_ident()?];
+                    while self.current_inside() == Some(TokenKind::ColonColon) {
+                        self.next_token();
+                        path.push(self.take_ident()?);
+                    }
+                    let mut alias = None;
+                    if self.current_inside() == Some(TokenKind::Keyword(Keyword::As)) {
+                        self.next_token();
+                        alias = Some(self.take_ident()?);
+                    }
+                    self.consume(TokenKind::Semicolon)?;
+                    let span = Span::from((start, self.span.end));
+
+                    let use_item = ItemKind::Use { path: path.clone(), alias };
+                    let key = format!("__use_{}", path.join("_"));
+                    items.insert(key, Item::new_span(use_item, span));
+                }
+                TokenKind::Keyword(Keyword::Mod) => {
+                    let start = tok.span.start;
+                    self.next_token();
+                    let mod_name = self.take_ident()?;
+                    self.consume(TokenKind::Keyword(Keyword::Import))?;
+                    let path = if let Some(tok) = self.current().cloned() {
+                        match tok.value {
+                            TokenKind::String(p) => {
+                                self.next_token();
+                                p
+                            }
+                            // TODO: check if '{' then create ItemKind::Mod ...
+                            _ => return Err(BunError {
+                                message: "Expected string literal for module path".to_string(),
+                                span: tok.span,
+                                source: self.code,
+                            })
+                        }
+                    } else {
+                        return Err(BunError {
+                            message: "Unexpected EOF".to_string(),
+                            span: self.span,
+                            source: self.code,
+                        });
+                    };
+
+                    self.consume(TokenKind::Semicolon)?;
+                    let span = Span::from((start, self.span.end));
+
+                    let mod_item = ItemKind::ModImport { name: mod_name.clone(), path: path.clone() };
+                    let key = format!("__mod_{}", mod_name);
+                    items.insert(key, Item::new_span(mod_item, span));
+                }
                 other => {
                     return Err(BunError {
                         message: format!("Unexpected token '{}'", other),
@@ -224,6 +299,23 @@ impl<'src> Parser<'src> {
                     let span = Span::from((stmt_start, expr.span.end));
                     let decl = StmtKind::Declare { name, expr };
                     stmts.push(Stmt::new_span(decl, span));
+                }
+                TokenKind::Keyword(Keyword::Use) => {
+                    self.next_token();
+                    let mut path = vec![self.take_ident()?];
+                    while self.current_inside() == Some(TokenKind::ColonColon) {
+                        self.next_token();
+                        path.push(self.take_ident()?);
+                    }
+                    let mut alias = None;
+                    if self.current_inside() == Some(TokenKind::Keyword(Keyword::As)) {
+                        self.next_token();
+                        alias = Some(self.take_ident()?);
+                    }
+                    self.consume(TokenKind::Semicolon)?;
+                    let span = Span::from((stmt_start, self.span.end));
+                    let use_stmt = StmtKind::Use { path, alias };
+                    stmts.push(Stmt::new_span(use_stmt, span));
                 }
                 TokenKind::RightBrace => break,
                 _ => {
@@ -278,7 +370,7 @@ impl<'src> Parser<'src> {
             TokenKind::Keyword(Keyword::Continue) => {
                 Ok(Expr::new_span(ExprKind::Continue, tok.span))
             }
-            TokenKind::Number(_) | TokenKind::String(_) => Ok(Expr::new_span(
+            TokenKind::Float(_) | TokenKind::Int(_) | TokenKind::String(_) => Ok(Expr::new_span(
                 ExprKind::Literal(tok.value.clone()),
                 tok.span,
             )),
@@ -457,19 +549,6 @@ impl<'src> Parser<'src> {
                         span,
                     ))
                 }
-            }
-            TokenKind::DotDot => {
-                let precedence = Precedence::from_token(&op_tok.value);
-                let right = self.parse_expr(precedence)?;
-                let span = Span::from((left.span.start, right.span.end));
-                Ok(Expr::new_span(
-                    ExprKind::Binary {
-                        op: op_tok.value.clone(),
-                        left: Box::new(left),
-                        right: Box::new(right),
-                    },
-                    span,
-                ))
             }
             TokenKind::Equals
             | TokenKind::PlusEquals

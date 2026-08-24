@@ -1,12 +1,12 @@
+use crate::builtins::{bun_print, bun_println, bun_read};
 use crate::environment::Environment;
 use crate::error::BunError;
 use crate::lexer::TokenKind;
 use crate::location::Span;
 use crate::parser::{Expr, ExprKind, Item, ItemKind, Stmt, StmtKind};
-pub(crate) use crate::value::Value;
+use crate::value::Value;
 use std::cmp::Ordering;
 use std::collections::HashMap;
-use std::io;
 
 #[derive(Debug)]
 pub enum ControlFlow<'src> {
@@ -34,6 +34,50 @@ impl<'src> Interpreter<'src> {
     pub fn run(&mut self) -> Result<(), BunError<'src>> {
         let mut global_env = Environment::new(None);
 
+        global_env.define("io::println", Value::Native(bun_println));
+        global_env.define("io::print", Value::Native(bun_print));
+        global_env.define("io::read", Value::Native(bun_read));
+
+        for item in self.items.values() {
+            if let ItemKind::Use { path, alias } = &item.value {
+                let target = path.join("::");
+                let prefix_module = format!("{}::", target);
+                let bindings = global_env.get_all();
+                let mut found = false;
+
+                for (key, val) in bindings {
+                    if key.starts_with(&prefix_module) {
+                        let suffix = &key[prefix_module.len()..];
+                        let new_key = if let Some(a) = alias {
+                            format!("{}::{}", a, suffix)
+                        } else {
+                            suffix.to_string()
+                        };
+                        global_env.define(new_key, val);
+                        found = true;
+                    } else if key == target {
+                        let new_key = if let Some(a) = alias {
+                            a.clone()
+                        } else {
+                            path.last().unwrap().clone()
+                        };
+                        global_env.define(new_key, val);
+                        found = true;
+                    }
+                }
+
+                if !found {
+                    return Err(BunError {
+                        message: format!("Module or function '{}' not found", target),
+                        span: item.span,
+                        source: self.code,
+                    });
+                }
+            }
+        }
+
+        dbg!(&global_env);
+
         let Some(Item {
             value: ItemKind::FnDeclare { block, .. },
             ..
@@ -56,7 +100,8 @@ impl<'src> Interpreter<'src> {
     ) -> Result<Value, ControlFlow<'src>> {
         match &expr.value {
             ExprKind::Literal(TokenKind::Bool(b)) => Ok(Value::Bool(*b)),
-            ExprKind::Literal(TokenKind::Number(n)) => Ok(Value::F64(*n)),
+            ExprKind::Literal(TokenKind::Float(n)) => Ok(Value::Float(*n)),
+            ExprKind::Literal(TokenKind::Int(n)) => Ok(Value::Int(*n)),
             ExprKind::Literal(TokenKind::String(s)) => Ok(Value::String(s.clone())),
             ExprKind::Ident(name) => env.get(name).ok_or_else(|| {
                 BunError {
@@ -150,7 +195,7 @@ impl<'src> Interpreter<'src> {
                         .map(|ord| Value::Bool(ord == Ordering::Greater || ord == Ordering::Equal))
                         .ok_or_else(|| format!("Cannot compare {:?} and {:?}", lhs, rhs)),
                     TokenKind::DotDot => {
-                        if let (Value::F64(start), Value::F64(end)) = (lhs, rhs) {
+                        if let (Value::Int(start), Value::Int(end)) = (lhs, rhs) {
                             Ok(Value::Range(start, end))
                         } else {
                             Err("Range bounds must be numbers".to_string())
@@ -220,95 +265,59 @@ impl<'src> Interpreter<'src> {
                 }
             }
             ExprKind::Block { stmts } => {
-                let parent_env = std::mem::replace(env, Environment::new(None));
-                let mut block_env = Environment::new(Some(parent_env));
-                let mut last_val = Value::Unit;
-                let mut flow_err = None;
-                for stmt in stmts {
-                    match self.eval_stmt(stmt, &mut block_env) {
-                        Ok(val) => last_val = val,
-                        Err(e) => {
-                            flow_err = Some(e);
-                            break;
-                        }
+                self.in_block_scope(env, |block_env| {
+                    let mut last_val = Value::Unit;
+                    for stmt in stmts {
+                        last_val = self.eval_stmt(stmt, block_env)?;
                     }
-                }
-                *env = block_env
-                    .parent
-                    .map(|p| *p)
-                    .unwrap_or(Environment::new(None));
-
-                if let Some(err) = flow_err {
-                    return Err(err);
-                }
-
-                Ok(last_val)
+                    Ok(last_val)
+                })
             }
             ExprKind::Call { path, args } => {
-                if path[0] == "io" {
-                    match path[1].as_str() {
-                        "println" => {
-                            for arg in args {
-                                let val = self.eval_expr(arg, env)?;
-                                print!("{}", val);
+                let func_name = path.join("::");
+                let mut evaluated_args = Vec::new();
+                for arg in args {
+                    evaluated_args.push(self.eval_expr(arg, env)?);
+                }
+                if let Some(val) = env.get(&func_name) {
+                    if let Value::Native(native_fn) = val {
+                        return native_fn(evaluated_args).map_err(|msg| {
+                            BunError {
+                                message: msg,
+                                span: expr.span,
+                                source: self.code,
                             }
-                            println!();
-                            return Ok(Value::Unit);
-                        }
-                        "print" => {
-                            for arg in args {
-                                let val = self.eval_expr(arg, env)?;
-                                print!("{}", val);
-                            }
-                            return Ok(Value::Unit);
-                        }
-                        "read" => {
-                            if args.len() > 1 {
-                                return Err(BunError {
-                                    message: "Read doesn't take more than 0 arguments".to_string(),
-                                    span: expr.span,
-                                    source: self.code,
-                                }
-                                .into());
-                            }
-                            let mut input = String::new();
-                            io::stdin().read_line(&mut input).expect("Failed to read input");
-                            return Ok(Value::String(input.trim_end().to_string()));
-                        }
-                        _ => {}
+                            .into()
+                        });
                     }
                 }
-                if let Some(func_name) = path.last()
-                    && let Some(func_item) = self.items.get(func_name)
-                {
+                if let Some(func_item) = self.items.get(path.last().unwrap()) {
                     match &func_item.value {
-                        ItemKind::FnDeclare {
-                            inputs,
-                            block,
-                            ..
-                        } => {
-                            if args.len() != inputs.len() {
+                        ItemKind::FnDeclare { inputs, block, .. } => {
+                            if evaluated_args.len() != inputs.len() {
                                 return Err(BunError {
                                     message: format!(
                                         "Function '{}' expects {} arguments, but got {}",
                                         func_name,
                                         inputs.len(),
-                                        args.len()
+                                        evaluated_args.len()
                                     ),
                                     span: expr.span,
                                     source: self.code,
                                 }
-                                    .into());
+                                .into());
                             }
                             let mut func_env = Environment::new(None);
-                            for (input_name, args) in inputs.iter().zip(args) {
-                                func_env.define(input_name, self.eval_expr(args, env)?);
+                            func_env.vars = env.get_top();
+                            for (input_name, arg_val) in inputs.iter().zip(evaluated_args) {
+                                func_env.define(input_name, arg_val);
                             }
                             return self.eval_block(block, &mut func_env).map_err(|e| e.into());
                         }
+                        _ => {}
                     };
                 }
-                let func_name = path.join("::");
+
                 Err(BunError {
                     message: format!("Unknown function '{}'", func_name),
                     span: expr.span,
@@ -362,48 +371,66 @@ impl<'src> Interpreter<'src> {
 
                 Ok(last_val)
             }
+            ExprKind::For {
+                item,
+                iterable,
+                body,
+            } => {
+                let iter_val = self.eval_expr(iterable, env)?;
+                let mut last_val = Value::Unit;
 
-            // ExprKind::For {
-            //     item,
-            //     iterable,
-            //     body,
-            // } => {
-            //     let iter_val = self.eval_expr(iterable, env)?;
-            //     let mut last_val = Value::Unit;
-            //
-            //     // Currently only supporting our internal Range type
-            //     if let Value::Range(start, end) = iter_val {
-            //         let mut current = start as i64;
-            //         let target = end as i64;
-            //
-            //         while current < target {
-            //             // Create a new scope for the loop body
-            //             let parent_env = std::mem::replace(env, Environment::new(None));
-            //             let mut loop_env = Environment::new(Some(parent_env));
-            //
-            //             // Define the iterator variable (e.g., 'i' in 'for i in 0..10')
-            //             loop_env.define(item.clone(), Value::F64(current as f64));
-            //
-            //             last_val = self.eval_stmt(body, &mut loop_env)?;
-            //
-            //             // Restore parent environment
-            //             *env = loop_env
-            //                 .parent
-            //                 .map(|p| *p)
-            //                 .unwrap_or(Environment::new(None));
-            //             current += 1;
-            //         }
-            //         Ok(last_val)
-            //     } else {
-            //         Err(BunError {
-            //             message: "Target is not iterable".to_string(),
-            //             span: expr.span,
-            //             source: self.code,
-            //         })
-            //     }
-            // }
-            ExprKind::Break => return Err(ControlFlow::Break),
-            ExprKind::Continue => return Err(ControlFlow::Continue),
+                if let Value::Range(start, end) = iter_val {
+                    let mut current = start;
+                    let target = end;
+                    while current < target {
+                        let res = self.in_block_scope(env, |loop_env| {
+                            loop_env.define(item.clone(), Value::Int(current));
+                            self.eval_expr(body, loop_env)
+                        });
+                        match res {
+                            Ok(val) => last_val = val,
+                            Err(ControlFlow::Break) => break,
+                            Err(ControlFlow::Continue) => {}
+                            Err(err) => return Err(err),
+                        }
+                        current += 1;
+                    }
+                    Ok(last_val)
+                } else {
+                    Err(BunError {
+                        message: format!(
+                            "Target of type '{}' is not iterable",
+                            iter_val.get_type_name()
+                        ),
+                        span: expr.span,
+                        source: self.code,
+                    }
+                    .into())
+                }
+            }
+            ExprKind::MethodCall {
+                receiver,
+                method,
+                args,
+            } => {
+                let receiver_val = self.eval_expr(receiver, env)?;
+                let mut evaluated_args = Vec::new();
+                for arg in args {
+                    evaluated_args.push(self.eval_expr(arg, env)?);
+                }
+                receiver_val
+                    .call_method(method, evaluated_args)
+                    .map_err(|msg| {
+                        BunError {
+                            message: msg,
+                            span: expr.span,
+                            source: self.code,
+                        }
+                        .into()
+                    })
+            }
+            ExprKind::Break => Err(ControlFlow::Break),
+            ExprKind::Continue => Err(ControlFlow::Continue),
             _ => Err(BunError {
                 message: "Expression not implemented in interpreter yet".to_string(),
                 span: expr.span,
@@ -425,6 +452,43 @@ impl<'src> Interpreter<'src> {
                 Ok(Value::Unit)
             }
             StmtKind::Expr(expr) => self.eval_expr(expr, env),
+            StmtKind::Use { path, alias } => {
+                let target = path.join("::");
+                let prefix_module = format!("{}::", target);
+                let bindings = env.get_all();
+                let mut found = false;
+
+                for (key, val) in bindings {
+                    if key.starts_with(&prefix_module) {
+                        let suffix = &key[prefix_module.len()..];
+                        let new_key = if let Some(a) = alias {
+                            format!("{}::{}", a, suffix)
+                        } else {
+                            suffix.to_string()
+                        };
+                        env.define(new_key, val);
+                        found = true;
+                    } else if key == target {
+                        let new_key = if let Some(a) = alias {
+                            a.clone()
+                        } else {
+                            path.last().unwrap().clone()
+                        };
+                        env.define(new_key, val);
+                        found = true;
+                    }
+                }
+
+                if !found {
+                    return Err(ControlFlow::Error(BunError {
+                        message: format!("Module or function '{}' not found", target),
+                        span: stmt.span,
+                        source: self.code,
+                    }));
+                }
+
+                Ok(Value::Unit)
+            }
         }
     }
 
@@ -443,5 +507,22 @@ impl<'src> Interpreter<'src> {
                 source: self.code,
             }),
         }
+    }
+
+    fn in_block_scope<F>(
+        &self,
+        env: &mut Environment,
+        mut f: F,
+    ) -> Result<Value, ControlFlow<'src>>
+    where
+        F: FnMut(&mut Environment) -> Result<Value, ControlFlow<'src>>,
+    {
+        let parent_env = std::mem::replace(env, Environment::new(None));
+        let mut block_env = Environment::new(Some(parent_env));
+
+        let result = f(&mut block_env);
+
+        *env = block_env.parent.map(|p| *p).unwrap_or(Environment::new(None));
+        result
     }
 }

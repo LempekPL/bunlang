@@ -1,5 +1,6 @@
 use std::collections::HashMap;
-use crate::interpreter::Value;
+use crate::interpreter::ControlFlow;
+use crate::value::Value;
 
 #[derive(Debug)]
 pub struct Environment {
@@ -23,6 +24,25 @@ impl Environment {
         } else {
             None
         }
+    }
+
+    pub fn get_top(&self) -> HashMap<String, Value> {
+        let mut curr = self;
+        while let Some(ref parent) = curr.parent {
+            curr = parent;
+        }
+        curr.vars.clone()
+    }
+
+    pub fn get_all(&self) -> HashMap<String, Value> {
+        let mut all = HashMap::new();
+        if let Some(parent) = &self.parent {
+            all.extend(parent.get_all());
+        }
+        for (k, v) in &self.vars {
+            all.insert(k.clone(), v.clone());
+        }
+        all
     }
 
     pub fn define(&mut self, name: impl Into<String>, val: Value) {

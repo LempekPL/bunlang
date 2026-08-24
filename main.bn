@@ -1,6 +1,6 @@
 //mod a import "./test.bn";
-// use io;
-//use io as b;
+use io;
+use io as b;
 // mod c {
 //  fn test() {
 //      io::println("lempek");
@@ -17,9 +17,13 @@ fn trolujN(a) {
 }
 
 fn main() {
+    b::println("joł");
+    println("sex");
+    let a = 10.0;
+    let c = 20.;
+    let b = a * 2. + c;
+    a = a + (b * 100.);
     let a = 10;
-    let b = a * 2;
-    a = a + (b * 100);
     a += 1;
     if a > 18 {
         io::println("jepi ", a);
@@ -30,6 +34,7 @@ fn main() {
     }
     let i = 0;
     let a = "królik";
+    io::print("test: ");
     let ilosc = io::read();
     while i < 10 {
         io::println(i, ". " + a);
@@ -37,5 +42,23 @@ fn main() {
         trolujN(ilosc);
         i += 1;
     }
+    for i in 0..10 {
+        if i % 2 == 0 {
+            continue;
+        }
+        io::println("Nieparzysta: ", i);
+    }
+
+    let name = "   bunlang   ";
+    io::print("Original len: ".to_uppercase());
+    io::println(name.len());
+
+    name = name.trim();
+    name = name.to_uppercase();
+
+    io::println("Fixed name: ", name);
+    io::print("Fixed len: ");
+    io::println(name.len());
+    io::println(b);
     // c::test()
 }

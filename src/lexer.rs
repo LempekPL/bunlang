@@ -19,6 +19,11 @@ pub enum Keyword {
     Continue,
     Break,
     Return,
+    Use,
+    As,
+    Mod,
+    Import,
+    Pub,
 }
 
 impl fmt::Display for Keyword {
@@ -39,6 +44,11 @@ impl fmt::Display for Keyword {
             Keyword::Continue => write!(f, "continue"),
             Keyword::Break => write!(f, "break"),
             Keyword::Return => write!(f, "return"),
+            Keyword::Use => write!(f, "use"),
+            Keyword::As => write!(f, "as"),
+            Keyword::Mod => write!(f, "mod"),
+            Keyword::Import => write!(f, "import"),
+            Keyword::Pub => write!(f, "pub"),
         }
     }
 }
@@ -47,7 +57,8 @@ impl fmt::Display for Keyword {
 pub enum TokenKind {
     Ident(String),
     Keyword(Keyword),
-    Number(f64),
+    Float(f64),
+    Int(i64),
     String(String),
     Bool(bool),
     EqualsEquals,
@@ -92,7 +103,8 @@ impl fmt::Display for TokenKind {
         match self {
             Self::Ident(ident) => write!(f, "{}", ident),
             Self::Keyword(keyword) => write!(f, "{}", keyword),
-            Self::Number(num) => write!(f, "{}", num),
+            Self::Float(num) => write!(f, "{}", num),
+            Self::Int(num) => write!(f, "{}", num),
             Self::String(string) => write!(f, "{}", string),
             Self::Bool(bool) => write!(f, "{}", bool),
             Self::EqualsEquals => write!(f, "=="),
@@ -368,6 +380,11 @@ impl<'src> Lexer<'src> {
                     let mut dot = false;
                     while let Some(&v) = chars.peek() {
                         if v == '.' {
+                            let mut lookahead = chars.clone();
+                            lookahead.next();
+                            if lookahead.peek() == Some(&'.') {
+                                break;
+                            }
                             if dot {
                                 break;
                             }
@@ -381,17 +398,19 @@ impl<'src> Lexer<'src> {
                             break;
                         }
                     }
+                    let token = if dot {
+                        number_str.parse::<f64>().map(|v| TokenKind::Float(v)).ok()
+                    } else {
+                        number_str.parse::<i64>().map(|v| TokenKind::Int(v)).ok()
+                    };
                     let number = number_str.parse::<f64>();
-                    if let Ok(number) = number {
-                        self.push_token(
-                            TokenKind::Number(number),
-                            Some(Span::from((start, self.pos))),
-                        );
+                    if let Some(token) = token {
+                        self.push_token(token, Some(Span::from((start, self.pos))));
                     } else {
                         return Err(BunError {
                             message: format!("Invalid number literal '{}'", number_str),
                             span: Span::from((start, self.pos)),
-                            source: &self.code,
+                            source: self.code,
                         });
                     }
                 }
@@ -489,6 +508,11 @@ impl<'src> Lexer<'src> {
                             "continue" => TokenKind::Keyword(Keyword::Continue),
                             "break" => TokenKind::Keyword(Keyword::Break),
                             "return" => TokenKind::Keyword(Keyword::Return),
+                            "use" => TokenKind::Keyword(Keyword::Use),
+                            "as" => TokenKind::Keyword(Keyword::As),
+                            "mod" => TokenKind::Keyword(Keyword::Mod),
+                            "import" => TokenKind::Keyword(Keyword::Import),
+                            "pub" => TokenKind::Keyword(Keyword::Pub),
                             _ => TokenKind::Ident(identifier),
                         },
                         Some(Span::from((start, self.pos))),

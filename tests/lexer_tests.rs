@@ -15,7 +15,7 @@ mod tests {
     fn test_single_number() {
         assert_eq!(
             kinds("123"),
-            vec![TokenKind::Number(123.0)]
+            vec![TokenKind::Float(123.0)]
         );
     }
 
@@ -78,9 +78,9 @@ mod tests {
                 TokenKind::Keyword(Keyword::Let),
                 TokenKind::Ident("x".into()),
                 TokenKind::Equals,
-                TokenKind::Number(42.0),
+                TokenKind::Float(42.0),
                 TokenKind::Plus,
-                TokenKind::Number(3.14),
+                TokenKind::Float(3.14),
                 TokenKind::Semicolon,
             ]
         );
@@ -94,7 +94,7 @@ mod tests {
                 TokenKind::Keyword(Keyword::Let),
                 TokenKind::Ident("x".into()),
                 TokenKind::Equals,
-                TokenKind::Number(1.0),
+                TokenKind::Float(1.0),
                 TokenKind::Semicolon,
             ]
         );
