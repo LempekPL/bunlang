@@ -18,7 +18,7 @@ fn main() {
         println!("{}", err);
         exit(0);
     }
-    // dbg!(&expr);
+    dbg!(&expr);
     let response = Interpreter::run(expr.unwrap(), &code);
     if let Err(err) = response {
         println!("{}", err);

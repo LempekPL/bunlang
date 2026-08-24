@@ -16,19 +16,27 @@ impl Environment {
     }
 
     pub fn get(&self, name: &str) -> Option<Value> {
-        match self.vars.get(name) {
-            Some(value) => Some(value.clone()),
-            None => {
-                if let Some(parent) = &self.parent {
-                    parent.get(name)
-                } else {
-                    None
-                }
-            }
+        if let Some(val) = self.vars.get(name) {
+            Some(val.clone())
+        } else if let Some(parent) = &self.parent {
+            parent.get(name)
+        } else {
+            None
         }
     }
 
-    pub fn set(&mut self, name: impl Into<String>, val: Value) {
+    pub fn define(&mut self, name: impl Into<String>, val: Value) {
         self.vars.insert(name.into(), val);
+    }
+
+    pub fn assign(&mut self, name: &str, val: Value) -> Result<(), String> {
+        if self.vars.contains_key(name) {
+            self.vars.insert(name.to_string(), val);
+            Ok(())
+        } else if let Some(parent) = &mut self.parent {
+            parent.assign(name, val)
+        } else {
+            Err(format!("Undefined variable '{}'", name))
+        }
     }
 }

@@ -1,6 +1,23 @@
+//mod a import "./test.bn";
+// use io;
+//use io as b;
+// mod c {
+//  fn test() {
+//      io::println("lempek");
+//  }
+// }
+
+// struct Point {
+//  x: f64,
+//  y: f64
+// }
+//
+
+
 fn main() {
     let a = 10;
-    let b = a / 0;
+    let b = a / 2;
     a = a + b;
     io::println(a);
+    // c::test()
 }

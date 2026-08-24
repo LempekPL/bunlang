@@ -46,4 +46,8 @@ impl<T> Locatable<T> {
     pub fn new_span(kind: T, span: Span) -> Self {
         Self { value: kind, span }
     }
+
+    pub fn into_inner(self) -> T {
+        self.value
+    }
 }

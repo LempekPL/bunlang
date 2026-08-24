@@ -7,108 +7,149 @@ pub(crate) use crate::value::Value;
 use std::collections::HashMap;
 
 pub struct Interpreter<'src> {
-    env: Environment,
     code: &'src str,
 }
 
 impl<'src> Interpreter<'src> {
+    pub fn new(code: &'src str) -> Self {
+        Self { code }
+    }
+
     pub fn run(items: HashMap<String, Item>, code: &'src str) -> Result<Value, BunError<'src>> {
-        let mut interpreter = Interpreter {
-            env: Environment::new(None),
-            code,
-        };
-        if let Some(Item {
+        let interpreter = Interpreter::new(code);
+        let mut global_env = Environment::new(None);
+
+        let block = if let Some(Item {
             value: ItemKind::FnDeclare { block, .. },
             ..
         }) = items.get("main")
         {
-            interpreter.interpret_expr(block)
+            block.clone()
         } else {
-            Err(BunError {
+            return Err(BunError {
                 message: "Function 'main' not found".into(),
                 span: Span::default(),
-                source: &code,
-            })
-        }
+                source: code,
+            });
+        };
+
+        interpreter.eval_expr(&block, &mut global_env)
     }
 
-    fn interpret_expr(&mut self, expr: &Expr) -> Result<Value, BunError<'src>> {
+    pub fn eval_expr(&self, expr: &Expr, env: &mut Environment) -> Result<Value, BunError<'src>> {
         match &expr.value {
-            ExprKind::Literal(v) => match v {
-                TokenKind::Number(v) => Ok(Value::Number(*v)),
-                TokenKind::String(v) => Ok(Value::String(v.clone())),
-                _ => Err(BunError {
-                    message: "Unexpected literal value".into(),
-                    span: expr.span.clone(),
-                    source: &self.code,
-                }),
-            },
-            ExprKind::Ident(v) => self.env.get(v).ok_or(BunError {
-                message: format!("Undefined variable '{}'", v),
-                span: expr.span.clone(),
-                source: &self.code,
+            ExprKind::Literal(TokenKind::Number(n)) => Ok(Value::F64(*n)),
+            ExprKind::Literal(TokenKind::String(s)) => Ok(Value::String(s.clone())),
+            ExprKind::Literal(TokenKind::Bool(b)) => Err(BunError {
+                message: format!("Boolean literals not supported in Value yet (found {})", b),
+                span: expr.span,
+                source: self.code,
             }),
-            ExprKind::Binary { op, left, right } => {
-                let left = self.interpret_expr(left)?;
-                let right = self.interpret_expr(right)?;
+            ExprKind::Ident(name) => env.get(name).ok_or_else(|| BunError {
+                message: format!("Undefined variable '{}'", name),
+                span: expr.span,
+                source: self.code,
+            }),
+            ExprKind::Unary { op, expr } => {
+                let val = self.eval_expr(expr, env)?;
                 match op {
-                    TokenKind::Plus => left + right,
-                    TokenKind::Minus => left - right,
-                    TokenKind::Star => left * right,
-                    TokenKind::Slash => left / right,
-                    TokenKind::Percent => left % right,
-                    _ => unreachable!(),
+                    TokenKind::Minus => (-val).map_err(|e| BunError {
+                        message: e.message.to_string(),
+                        span: expr.span,
+                        source: self.code,
+                    }),
+                    _ => Err(BunError {
+                        message: format!("Unsupported unary operator '{:?}'", op),
+                        span: expr.span,
+                        source: self.code,
+                    }),
                 }
             }
-            ExprKind::Unary { op, expr } => {
-                let expr = self.interpret_expr(expr)?;
-                match op {
-                    TokenKind::Minus => -expr,
-                    _ => unreachable!(),
+            ExprKind::Binary { op, left, right } => {
+                let lhs = self.eval_expr(left, env)?;
+                let rhs = self.eval_expr(right, env)?;
+
+                let res = match op {
+                    TokenKind::Plus => lhs + rhs,
+                    TokenKind::Minus => lhs - rhs,
+                    TokenKind::Star => lhs * rhs,
+                    TokenKind::Slash => lhs / rhs,
+                    TokenKind::Percent => lhs % rhs,
+                    _ => {
+                        return Err(BunError {
+                            message: format!("Unsupported binary operator '{:?}'", op),
+                            span: expr.span,
+                            source: self.code,
+                        });
+                    }
+                };
+
+                res.map_err(|e| BunError {
+                    message: e.message.to_string(),
+                    span: expr.span,
+                    source: self.code,
+                })
+            }
+            ExprKind::Assign { target, value } => {
+                let val = self.eval_expr(value, env)?;
+                if let ExprKind::Ident(name) = &target.value {
+                    env.assign(name, val.clone()).map_err(|msg| BunError {
+                        message: msg,
+                        span: target.span,
+                        source: self.code,
+                    })?;
+                    Ok(val)
+                } else {
+                    Err(BunError {
+                        message: "Invalid assignment target".to_string(),
+                        span: target.span,
+                        source: self.code,
+                    })
                 }
             }
             ExprKind::Block { stmts } => {
+                let parent_env = std::mem::replace(env, Environment::new(None));
+                let mut block_env = Environment::new(Some(parent_env));
+                let mut last_val = Value::Unit;
                 for stmt in stmts {
-                    self.interpret_stmt(stmt)?;
+                    last_val = self.eval_stmt(stmt, &mut block_env)?;
                 }
-                Ok(Value::Unit)
+                *env = block_env.parent.map(|p| *p).unwrap_or(Environment::new(None));
+
+                Ok(last_val)
             }
-            // ExprKind::Call { .. } => {}
-            _ => {
-                todo!()
+            ExprKind::Call { path, args } => {
+                let func_name = path.join("::");
+                if func_name == "io::println" {
+                    for arg in args {
+                        let val = self.eval_expr(arg, env)?;
+                        print!("{}", val);
+                    }
+                    println!();
+                    return Ok(Value::Unit);
+                }
+                Err(BunError {
+                    message: format!("Unknown function '{}'", func_name),
+                    span: expr.span,
+                    source: self.code,
+                })
             }
+            _ => Err(BunError {
+                message: "Expression not implemented in interpreter yet".to_string(),
+                span: expr.span,
+                source: self.code,
+            }),
         }
     }
 
-    fn interpret_stmt(&mut self, stmt: &Stmt) -> Result<Value, BunError<'src>> {
+    pub fn eval_stmt(&self, stmt: &Stmt, env: &mut Environment) -> Result<Value, BunError<'src>> {
         match &stmt.value {
             StmtKind::Declare { name, expr } => {
-                let expr = self.interpret_expr(&expr)?;
-                self.env.set(name, expr);
+                let val = self.eval_expr(expr, env)?;
+                env.define(name, val);
                 Ok(Value::Unit)
             }
-            StmtKind::Assign { name, expr } => {
-                let expr = self.interpret_expr(&expr)?;
-                self.env.set(name, expr);
-                Ok(Value::Unit)
-            }
-            StmtKind::Call { name, args } => {
-                match name.as_str() {
-                    "println" => {
-                        let expr = self.interpret_expr(&args[0])?;
-                        println!("{}", expr);
-                    }
-                    _ => {
-                        todo!()
-                    }
-                }
-                Ok(Value::Unit)
-            }
+            StmtKind::Expr(expr) => self.eval_expr(expr, env),
         }
-    }
-
-    fn nest(&mut self) {
-        let parent = std::mem::replace(&mut self.env, Environment::new(None));
-        self.env = Environment::new(Some(parent));
     }
 }

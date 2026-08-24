@@ -1,7 +1,6 @@
 use crate::error::BunError;
 use crate::location::{Locatable, Pos, Span};
 use std::fmt;
-use std::fmt::write;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Keyword {
@@ -70,6 +69,11 @@ pub enum TokenKind {
     ColonColon,
     Colon,
     Dot,
+    And,
+    Or,
+    BitAnd,
+    BitOr,
+    BitXor,
 }
 
 impl fmt::Display for TokenKind {
@@ -109,6 +113,11 @@ impl fmt::Display for TokenKind {
             Self::PercentEquals => write!(f, "%="),
             Self::LeftBracket => write!(f, "["),
             Self::RightBracket => write!(f, "]"),
+            Self::And => write!(f, "&&"),
+            Self::Or => write!(f, "||"),
+            Self::BitAnd => write!(f, "&"),
+            Self::BitOr => write!(f, "|"),
+            Self::BitXor => write!(f, "^"),
         }
     }
 }
@@ -297,6 +306,25 @@ impl<'src> Lexer<'src> {
                         self.push_token(TokenKind::Slash, None)
                     }
                 }
+                '&' => {
+                    if chars.peek() == Some(&'&') {
+                        let start = self.pos;
+                        self.bump(chars.next().unwrap());
+                        self.push_token(TokenKind::And, Some(Span::from((start, self.pos))));
+                    } else {
+                        self.push_token(TokenKind::BitAnd, None);
+                    }
+                }
+                '|' => {
+                    if chars.peek() == Some(&'|') {
+                        let start = self.pos;
+                        self.bump(chars.next().unwrap());
+                        self.push_token(TokenKind::Or, Some(Span::from((start, self.pos))));
+                    } else {
+                        self.push_token(TokenKind::BitOr, None);
+                    }
+                }
+                '^' => self.push_token(TokenKind::BitXor, None),
                 '%' => self.push_token(TokenKind::Percent, None),
                 '(' => self.push_token(TokenKind::LeftParen, None),
                 ')' => self.push_token(TokenKind::RightParen, None),
@@ -317,10 +345,21 @@ impl<'src> Lexer<'src> {
                 '0'..='9' => {
                     let start = self.pos;
                     let mut number_str = ch.to_string();
-                    while chars.peek().is_some_and(|v| v.is_numeric() || *v == '.') {
-                        let next_ch = chars.next().unwrap();
-                        number_str.push(next_ch);
-                        self.bump(next_ch);
+                    let mut dot = false;
+                    while let Some(&v) = chars.peek() {
+                        if v == '.' {
+                            if dot {
+                                break;
+                            }
+                            dot = true;
+                            number_str.push(chars.next().unwrap());
+                            self.bump('.');
+                        } else if v.is_numeric() {
+                            number_str.push(chars.next().unwrap());
+                            self.bump(v);
+                        } else {
+                            break;
+                        }
                     }
                     let number = number_str.parse::<f64>();
                     if let Ok(number) = number {
@@ -344,14 +383,54 @@ impl<'src> Lexer<'src> {
                             break;
                         }
                         let next_ch = chars.next().unwrap();
-                        string.push(next_ch);
-                        self.bump(next_ch);
+                        if next_ch == '\\' {
+                            self.bump(next_ch);
+                            if let Some(escaped_ch) = chars.next() {
+                                match escaped_ch {
+                                    'n' => string.push('\n'),
+                                    't' => string.push('\t'),
+                                    'r' => string.push('\r'),
+                                    '\\' => string.push('\\'),
+                                    '"' => string.push('"'),
+                                    '0' => string.push('\0'),
+                                    other => {
+                                        return Err(BunError {
+                                            message: format!(
+                                                "Unknown escape sequence '\\{}'",
+                                                other
+                                            ),
+                                            span: Span::from((start, self.pos)),
+                                            source: self.code,
+                                        });
+                                    }
+                                }
+                                self.bump(escaped_ch);
+                            } else {
+                                return Err(BunError {
+                                    message: "Unterminated string literal (ends with '\\')".into(),
+                                    span: Span::from((start, self.pos)),
+                                    source: self.code,
+                                });
+                            }
+                        } else {
+                            if next_ch == '\n' {
+                                return Err(BunError {
+                                    message:
+                                        "Unterminated string literal (found unescaped newline)"
+                                            .into(),
+                                    span: Span::from((start, self.pos)),
+                                    source: self.code,
+                                });
+                            }
+                            string.push(next_ch);
+                            self.bump(next_ch);
+                        }
                     }
                     if chars.next().is_none() {
                         return Err(BunError {
                             message: "Unterminated string literal".into(),
                             span: Span::from((start, self.pos)),
-                            source: &self.code,
+                            source: self.code,
                         });
                     }
                     self.bump('"');

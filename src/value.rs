@@ -5,17 +5,19 @@ use crate::location::Span;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
-    Number(f64),
+    F64(f64),
     String(String),
     Unit,
+    Struct(Vec<Value>),
 }
 
 impl Display for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
-            Value::Number(v) => write!(f, "{}", v),
+            Value::F64(v) => write!(f, "{}", v),
             Value::String(v) => write!(f, "{}", v),
             Value::Unit => write!(f, "()"),
+            Value::Struct(_) => write!(f, "()"),
         }
     }
 }
@@ -25,7 +27,7 @@ impl Add for Value {
 
     fn add(self, rhs: Value) -> Self::Output {
         match (self, rhs) {
-            (Value::Number(lhs), Value::Number(rhs)) => Ok(Value::Number(lhs + rhs)),
+            (Value::F64(lhs), Value::F64(rhs)) => Ok(Value::F64(lhs + rhs)),
             (Value::String(lhs), Value::String(rhs)) => Ok(Value::String(lhs + &rhs)),
             (a, b) => Err(BunError {
                 message: format!("Miss matched types, cannot add {:?} and {:?}", a, b),
@@ -41,7 +43,7 @@ impl Sub for Value {
 
     fn sub(self, rhs: Value) -> Self::Output {
         match (self, rhs) {
-            (Value::Number(lhs), Value::Number(rhs)) => Ok(Value::Number(lhs - rhs)),
+            (Value::F64(lhs), Value::F64(rhs)) => Ok(Value::F64(lhs - rhs)),
             (Value::String(_), Value::String(_)) => Err(BunError {
                 message: format!("Cannot subtract strings"),
                 span: Span::default(),
@@ -61,7 +63,7 @@ impl Mul for Value {
 
     fn mul(self, rhs: Value) -> Self::Output {
         match (self, rhs) {
-            (Value::Number(lhs), Value::Number(rhs)) => Ok(Value::Number(lhs * rhs)),
+            (Value::F64(lhs), Value::F64(rhs)) => Ok(Value::F64(lhs * rhs)),
             (Value::String(_), Value::String(_)) => Err(BunError {
                 message: format!("Cannot multiply strings"),
                 span: Span::default(),
@@ -81,7 +83,7 @@ impl Div for Value {
 
     fn div(self, rhs: Value) -> Self::Output {
         match (self, rhs) {
-            (Value::Number(lhs), Value::Number(rhs)) => Ok(Value::Number(lhs / rhs)),
+            (Value::F64(lhs), Value::F64(rhs)) => Ok(Value::F64(lhs / rhs)),
             (Value::String(_), Value::String(_)) => Err(BunError {
                 message: format!("Cannot divide strings"),
                 span: Span::default(),
@@ -101,7 +103,7 @@ impl Rem for Value {
 
     fn rem(self, rhs: Self) -> Self::Output {
         match (self, rhs) {
-            (Value::Number(lhs), Value::Number(rhs)) => Ok(Value::Number(lhs / rhs)),
+            (Value::F64(lhs), Value::F64(rhs)) => Ok(Value::F64(lhs / rhs)),
             (Value::String(_), Value::String(_)) => Err(BunError {
                 message: "Cannot use reminder on strings".to_string(),
                 span: Span::default(),
@@ -121,7 +123,7 @@ impl Neg for Value {
 
     fn neg(self) -> Self::Output {
         match self {
-            Value::Number(num) => Ok(Value::Number(-num)),
+            Value::F64(num) => Ok(Value::F64(-num)),
             Value::String(_) => Err(BunError {
                 message: "Cannot negate strings".to_string(),
                 span: Span::default(),

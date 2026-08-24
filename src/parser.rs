@@ -1,9 +1,7 @@
-use std::collections::HashMap;
-use crate::lexer::{Keyword, Token, TokenKind};
-use crate::location::{Locatable, Pos, Span};
-use std::fmt;
-use std::marker::PhantomData;
 use crate::error::BunError;
+use crate::lexer::{Keyword, Token, TokenKind};
+use crate::location::{Locatable, Span};
+use std::collections::HashMap;
 
 #[derive(Debug)]
 pub enum ExprKind {
@@ -22,10 +20,27 @@ pub enum ExprKind {
         stmts: Vec<Stmt>,
     },
     Call {
-        name: String,
+        path: Vec<String>,
         args: Vec<Expr>,
     },
+    Assign {
+        target: Box<Expr>,
+        value: Box<Expr>,
+    },
     QualifiedIdent(Vec<String>),
+    StructInit {
+        name: String,
+        fields: Vec<(String, Box<Expr>)>,
+    },
+    FieldAccess {
+        expr: Box<Expr>,
+        field: String,
+    },
+    MethodCall {
+        receiver: Box<Expr>,
+        method: String,
+        args: Vec<Expr>,
+    },
 }
 
 pub type Expr = Locatable<ExprKind>;
@@ -33,8 +48,7 @@ pub type Expr = Locatable<ExprKind>;
 #[derive(Debug)]
 pub enum StmtKind {
     Declare { name: String, expr: Expr },
-    Assign { name: String, expr: Expr },
-    Call { name: String, args: Vec<Expr> },
+    Expr(Expr),
 }
 
 pub type Stmt = Locatable<StmtKind>;
@@ -46,6 +60,14 @@ pub enum ItemKind {
         inputs: Vec<Expr>,
         block: Expr,
     },
+    // StructDeclare {
+    //     name: String,
+    //     fields: Vec<(String, Type)>,
+    // },
+    // Impl {
+    //     target: String,
+    //     items: Vec<Item>,
+    // },
 }
 
 pub type Item = Locatable<ItemKind>;
@@ -61,8 +83,50 @@ pub struct Program {
     pub stmts: Vec<Stmt>,
 }
 
+#[derive(Debug, PartialEq, PartialOrd, Clone)]
+enum Precedence {
+    None = 0,
+    Assignment, // =
+    Or,         // ||
+    And,        // &&
+    BitOr,      // |
+    BitXor,     // ^
+    BitAnd,     // &
+    Equality,   // == !=
+    Comparison, // < > <= >=
+    Term,       // + -
+    Factor,     // * / %
+    Unary,      // ! -
+    Call,       // . ()
+}
+
+impl Precedence {
+    pub fn from_token(kind: &TokenKind) -> Self {
+        match kind {
+            TokenKind::Equals => Precedence::Assignment,
+            TokenKind::Or => Precedence::Or,
+            TokenKind::And => Precedence::And,
+            TokenKind::BitOr => Precedence::BitOr,
+            TokenKind::BitXor => Precedence::BitXor,
+            TokenKind::BitAnd => Precedence::BitAnd,
+            TokenKind::EqualsEquals | TokenKind::NotEquals => Precedence::Equality,
+            TokenKind::Less
+            | TokenKind::LessEquals
+            | TokenKind::Greater
+            | TokenKind::GreaterEquals => Precedence::Comparison,
+            TokenKind::Plus | TokenKind::Minus => Precedence::Term,
+            TokenKind::Star | TokenKind::Slash | TokenKind::Percent => Precedence::Factor,
+            TokenKind::Dot | TokenKind::LeftParen => Precedence::Call,
+            _ => Precedence::None,
+        }
+    }
+}
+
 impl<'src> Parser<'src> {
-    pub fn parse(tokens: Vec<Token>, code: &'src str) -> Result<HashMap<String, Item>, BunError<'src>> {
+    pub fn parse(
+        tokens: Vec<Token>,
+        code: &'src str,
+    ) -> Result<HashMap<String, Item>, BunError<'src>> {
         let mut parser = Self {
             tokens,
             code,
@@ -78,7 +142,7 @@ impl<'src> Parser<'src> {
             match &tok.value {
                 TokenKind::Keyword(Keyword::Fn) => {
                     let start = tok.span.start;
-                    self.advance();
+                    self.next_token();
                     let ident = self.take_ident()?;
                     self.consume(TokenKind::LeftParen)?;
                     // todo: implement input
@@ -108,87 +172,31 @@ impl<'src> Parser<'src> {
         let mut stmts = Vec::new();
         let start = self.span.start;
         self.consume(TokenKind::LeftBrace)?;
+
         while let Some(tok) = self.current().cloned() {
-            let start = tok.span.start;
+            let stmt_start = tok.span.start;
+
             match &tok.value {
                 TokenKind::Keyword(Keyword::Let) => {
-                    self.advance();
+                    self.next_token();
                     let name = self.take_ident()?;
                     self.consume(TokenKind::Equals)?;
-                    let expr = self.parse_expr()?;
+                    let expr = self.parse_expr(Precedence::None)?;
                     self.consume(TokenKind::Semicolon)?;
-                    let span = Span::from((start, expr.span.end));
+                    let span = Span::from((stmt_start, expr.span.end));
                     let decl = StmtKind::Declare { name, expr };
                     stmts.push(Stmt::new_span(decl, span));
                 }
-                TokenKind::Ident(_) => {
-                    let name = self.take_ident()?;
-                    if let Some(next) = self.current().cloned() {
-                        match &next.value {
-                            TokenKind::Equals => {
-                                self.advance();
-                                let expr = self.parse_expr()?;
-                                self.consume(TokenKind::Semicolon)?;
-                                let span = Span::from((start, expr.span.end));
-                                let ass = StmtKind::Assign { name, expr };
-                                stmts.push(Stmt::new_span(ass, span));
-                            }
-                            TokenKind::ColonColon => {
-                                self.advance();
-                                let expr = self.parse_expr()?;
-                                self.consume(TokenKind::Semicolon)?;
-                                let span = Span::from((start, expr.span.end));
-                                let ass = StmtKind::Assign { name, expr };
-                                stmts.push(Stmt::new_span(ass, span));
-                            }
-                            TokenKind::LeftParen => {
-                                self.advance();
-                                let mut args = Vec::new();
-                                while let Some(peek) = self.current() {
-                                    match peek.value {
-                                        TokenKind::RightParen => {
-                                            self.consume(TokenKind::RightParen)?;
-                                            break;
-                                        }
-                                        TokenKind::Comma => {
-                                            self.consume(TokenKind::Comma)?;
-                                        }
-                                        _ => {
-                                            let expr = self.parse_expr()?;
-                                            args.push(expr);
-                                        }
-                                    }
-                                }
-                                let call = StmtKind::Call {
-                                    name: name.to_string(),
-                                    args,
-                                };
-                                self.consume(TokenKind::Semicolon)?;
-                                let span = Span::from((start, self.span.end));
-                                stmts.push(Stmt::new_span(call, span));
-                            }
-                            other => {
-                                return Err(BunError {
-                                    message: format!("Unexpected token '{}'", other),
-                                    span: next.span,
-                                    source: self.code,
-                                });
-                            }
-                        }
-                    }
-                }
-                TokenKind::RightBrace => {
-                    break;
-                }
-                other => {
-                    return Err(BunError {
-                        message: format!("Unexpected token '{}'", other),
-                        span: tok.span,
-                        source: self.code,
-                    });
+                TokenKind::RightBrace => break,
+                _ => {
+                    let expr = self.parse_expr(Precedence::None)?;
+                    self.consume(TokenKind::Semicolon)?;
+                    let span = Span::from((stmt_start, self.span.end));
+                    stmts.push(Stmt::new_span(StmtKind::Expr(expr), span));
                 }
             }
         }
+
         self.consume(TokenKind::RightBrace)?;
         Ok(Expr::new_span(
             ExprKind::Block { stmts },
@@ -196,139 +204,196 @@ impl<'src> Parser<'src> {
         ))
     }
 
-    fn parse_expr(&mut self) -> Result<Expr, BunError<'src>> {
-        let expr = self.parse_additive()?;
-
-        Ok(expr)
-    }
-
-    fn parse_binary<F>(
-        &mut self,
-        mut parse_next: F,
-        ops: &[TokenKind],
-    ) -> Result<Expr, BunError<'src>>
-    where
-        F: FnMut(&mut Self) -> Result<Expr, BunError<'src>>,
-    {
-        let mut expr = parse_next(self)?;
+    fn parse_expr(&mut self, precedence: Precedence) -> Result<Expr, BunError<'src>> {
+        let mut left = self.parse_prefix()?;
 
         while let Some(tok) = self.current() {
-            if ops.contains(&tok.value) {
-                let op = tok.value.clone();
-                self.advance();
+            let next_precedence = Precedence::from_token(&tok.value);
 
-                let right = parse_next(self)?;
-                let span = Span::from((expr.span.start, right.span.end));
-                expr = Expr::new_span(
+            if precedence >= next_precedence {
+                break;
+            }
+            left = self.parse_infix(left)?;
+        }
+
+        Ok(left)
+    }
+
+    fn parse_prefix(&mut self) -> Result<Expr, BunError<'src>> {
+        let tok = self.next_token().cloned().ok_or_else(|| BunError {
+            message: "Unexpected EOF".into(),
+            span: self.span,
+            source: self.code,
+        })?;
+
+        match &tok.value {
+            TokenKind::Number(_) | TokenKind::String(_) => Ok(Expr::new_span(
+                ExprKind::Literal(tok.value.clone()),
+                tok.span,
+            )),
+            TokenKind::Ident(name) => {
+                let mut path = vec![name.clone()];
+                while self
+                    .current()
+                    .is_some_and(|t| t.value == TokenKind::ColonColon)
+                {
+                    self.next_token();
+                    path.push(self.take_ident()?);
+                }
+                if path.len() == 1 {
+                    Ok(Expr::new_span(ExprKind::Ident(name.clone()), tok.span))
+                } else {
+                    Ok(Expr::new_span(ExprKind::QualifiedIdent(path), tok.span))
+                }
+            }
+            TokenKind::Minus => {
+                let expr = self.parse_expr(Precedence::Unary)?;
+                let span = Span::from((tok.span.start, expr.span.end));
+                Ok(Expr::new_span(
+                    ExprKind::Unary {
+                        op: TokenKind::Minus,
+                        expr: Box::new(expr),
+                    },
+                    span,
+                ))
+            }
+            TokenKind::LeftParen => {
+                let expr = self.parse_expr(Precedence::None)?;
+                self.consume(TokenKind::RightParen)?;
+                Ok(expr)
+            }
+            other => Err(BunError {
+                message: format!("Expected expression, found '{}'", other),
+                span: tok.span,
+                source: self.code,
+            }),
+        }
+    }
+
+    fn parse_infix(&mut self, left: Expr) -> Result<Expr, BunError<'src>> {
+        let op_tok = self.next_token().cloned().ok_or_else(|| BunError {
+            message: "Unexpected EOF".into(),
+            span: self.span,
+            source: self.code,
+        })?;
+
+        match &op_tok.value {
+            TokenKind::Plus
+            | TokenKind::Minus
+            | TokenKind::Star
+            | TokenKind::Slash
+            | TokenKind::Percent => {
+                let precedence = Precedence::from_token(&op_tok.value);
+                let right = self.parse_expr(precedence)?;
+                let span = Span::from((left.span.start, right.span.end));
+                Ok(Expr::new_span(
                     ExprKind::Binary {
-                        op,
-                        left: Box::new(expr),
+                        op: op_tok.value.clone(),
+                        left: Box::new(left),
                         right: Box::new(right),
                     },
                     span,
-                );
-            } else {
-                break;
+                ))
             }
-        }
-
-        Ok(expr)
-    }
-
-    fn parse_additive(&mut self) -> Result<Expr, BunError<'src>> {
-        self.parse_binary(
-            |s| s.parse_multiplicative(),
-            &[TokenKind::Plus, TokenKind::Minus],
-        )
-    }
-
-    fn parse_multiplicative(&mut self) -> Result<Expr, BunError<'src>> {
-        self.parse_binary(
-            |s| s.parse_factor(),
-            &[TokenKind::Star, TokenKind::Slash, TokenKind::Percent],
-        )
-    }
-
-    fn parse_factor(&mut self) -> Result<Expr, BunError<'src>> {
-        if let Some(tok) = self.current().cloned() {
-            self.advance();
-            match &tok.value {
-                TokenKind::Number(_) | TokenKind::String(_) => {
-                    Ok(Expr::new_span(ExprKind::Literal(tok.value), tok.span))
-                }
-                TokenKind::Ident(name) => {
-                    if let Some(next) = self.current() {
-                        match next.value {
-                            TokenKind::LeftParen => {
-                                let start = tok.span.start;
-                                self.advance();
-                                let mut args = Vec::new();
-                                while let Some(peek) = self.current() {
-                                    match peek.value {
-                                        TokenKind::RightParen => {
-                                            self.consume(TokenKind::RightParen)?;
-                                            break;
-                                        }
-                                        TokenKind::Comma => {
-                                            self.consume(TokenKind::Comma)?;
-                                        }
-                                        _ => {
-                                            let expr = self.parse_expr()?;
-                                            args.push(expr);
-                                        }
-                                    }
-                                }
-                                let call = ExprKind::Call {
-                                    name: name.to_string(),
-                                    args,
-                                };
-                                let span = Span::from((start, self.span.end));
-                                Ok(Expr::new_span(call, span))
-                            }
-                            _ => Ok(Expr::new_span(ExprKind::Ident(name.clone()), tok.span))
-                        }
-                    } else {
-                        Err(BunError {
-                            message: "Unexpected end of code".into(),
-                            span: Span::from(Pos::from((1usize, 1usize))),
-                            source: &self.code,
-                        })
+            TokenKind::LeftParen => {
+                let mut args = Vec::new();
+                while let Some(arg_tok) = self.current() {
+                    if arg_tok.value == TokenKind::RightParen {
+                        break;
+                    }
+                    args.push(self.parse_expr(Precedence::None)?);
+                    if self.current().is_some_and(|t| t.value == TokenKind::Comma) {
+                        self.next_token();
                     }
                 }
-                TokenKind::Minus => {
-                    let expr = self.parse_factor()?;
-                    let end = expr.span.end;
-                    Ok(Expr::new_span(
-                        ExprKind::Unary {
-                            op: TokenKind::Minus,
-                            expr: Box::new(expr),
+                self.consume(TokenKind::RightParen)?;
+                let span = Span::from((left.span.start, self.span.end));
+                match left.value {
+                    ExprKind::QualifiedIdent(path) => {
+                        Ok(Expr::new_span(ExprKind::Call { path, args }, span))
+                    }
+                    ExprKind::Ident(name) => Ok(Expr::new_span(
+                        ExprKind::Call {
+                            path: vec![name],
+                            args,
                         },
-                        Span::from((tok.span.start, end)),
+                        span,
+                    )),
+                    _ => Err(BunError {
+                        message: "Invalid function call target".to_string(),
+                        span: left.span,
+                        source: self.code,
+                    }),
+                }
+            }
+            TokenKind::Dot => {
+                let field_or_method = self.take_ident()?;
+                if self
+                    .current()
+                    .is_some_and(|t| t.value == TokenKind::LeftParen)
+                {
+                    self.next_token();
+                    let mut args = Vec::new();
+                    while let Some(arg_tok) = self.current() {
+                        if arg_tok.value == TokenKind::RightParen {
+                            break;
+                        }
+                        args.push(self.parse_expr(Precedence::None)?);
+                        if self.current().is_some_and(|t| t.value == TokenKind::Comma) {
+                            self.next_token();
+                        }
+                    }
+                    self.consume(TokenKind::RightParen)?;
+                    let span = Span::from((left.span.start, self.span.end));
+
+                    Ok(Expr::new_span(
+                        ExprKind::MethodCall {
+                            receiver: Box::new(left),
+                            method: field_or_method,
+                            args,
+                        },
+                        span,
+                    ))
+                } else {
+                    let span = Span::from((left.span.start, self.span.end));
+                    Ok(Expr::new_span(
+                        ExprKind::FieldAccess {
+                            expr: Box::new(left),
+                            field: field_or_method,
+                        },
+                        span,
                     ))
                 }
-                TokenKind::LeftParen => {
-                    let expr = self.parse_expr()?;
-                    self.consume(TokenKind::RightParen)?;
-                    Ok(expr)
-                }
-                other => Err(BunError {
-                    message: format!("Unexpected token '{}'", other),
-                    span: tok.span,
-                    source: self.code,
-                }),
             }
-        } else {
-            Err(BunError {
-                message: "Unexpected end of code".into(),
-                span: Span::from(Pos::from((1usize, 1usize))),
-                source: &self.code,
-            })
+            TokenKind::Equals => {
+                let right = self.parse_expr(Precedence::Assignment)?;
+                let span = Span::from((left.span.start, right.span.end));
+                match left.value {
+                    ExprKind::Ident(_) | ExprKind::FieldAccess { .. } => {
+                        Ok(Expr::new_span(
+                            ExprKind::Assign {
+                                target: Box::new(left),
+                                value: Box::new(right),
+                            },
+                            span,
+                        ))
+                    }
+                    _ => Err(BunError {
+                        message: "Invalid assignment target".to_string(),
+                        span: left.span,
+                        source: self.code,
+                    }),
+                }
+            }
+            _ => {
+                unreachable!("Operator missing in parse_infix")
+            }
         }
     }
 
     fn consume(&mut self, kind: TokenKind) -> Result<(), BunError<'src>> {
         if self.current().is_some_and(|v| v.value == kind) {
-            self.advance();
+            self.next_token();
             return Ok(());
         }
         Err(BunError {
@@ -342,11 +407,11 @@ impl<'src> Parser<'src> {
         if let Some(tok) = self.current()
             && let TokenKind::Ident(ident) = tok.clone().value
         {
-            self.advance();
+            self.next_token();
             return Ok(ident);
         }
 
-        if let Some(tok) = self.advance() {
+        if let Some(tok) = self.next_token() {
             if let TokenKind::Ident(ref v) = tok.value {
                 return Ok(v.clone());
             }
@@ -366,13 +431,10 @@ impl<'src> Parser<'src> {
         self.tokens.get(self.i)
     }
 
-    fn advance(&mut self) -> Option<&Token> {
+    fn next_token(&mut self) -> Option<&Token> {
+        let tok = self.tokens.get(self.i)?;
+        self.span = tok.span;
         self.i += 1;
-        if let Some(tok) = self.tokens.get(self.i) {
-            self.span = tok.span;
-            Some(tok)
-        } else {
-            None
-        }
+        Some(tok)
     }
 }
