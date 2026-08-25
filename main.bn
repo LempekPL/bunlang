@@ -1,64 +1,14 @@
-//mod a import "./test.bn";
-use io;
-use io as b;
-// mod c {
-//  fn test() {
-//      io::println("lempek");
-//  }
-// }
 
-// struct Point {
-//  x: f64,
-//  y: f64
-// }
-//
-fn trolujN(a) {
-    io::println("troluje ", a, " razy");
+
+fn add(a, b) {
+    return a + b;
 }
 
 fn main() {
-    b::println("joł");
-    println("sex");
-    let a = 10.0;
-    let c = 20.;
-    let b = a * 2. + c;
-    a = a + (b * 100.);
-    let a = 10;
-    a += 1;
-    if a > 18 {
-        io::println("jepi ", a);
-    } else if a == 18 {
-        io::println("prawie ", a);
-    } else {
-        io::println("spierdalaj ", a);
-    }
-    let i = 0;
-    let a = "królik";
-    io::print("test: ");
-    let ilosc = io::read();
-    while i < 10 {
-        io::println(i, ". " + a);
-        trolujN(i);
-        trolujN(ilosc);
-        i += 1;
-    }
-    for i in 0..10 {
-        if i % 2 == 0 {
-            continue;
-        }
-        io::println("Nieparzysta: ", i);
-    }
-
-    let name = "   bunlang   ";
-    io::print("Original len: ".to_uppercase());
-    io::println(name.len());
-
-    name = name.trim();
-    name = name.to_uppercase();
-
-    io::println("Fixed name: ", name);
-    io::print("Fixed len: ");
-    io::println(name.len());
-    io::println(b);
-    // c::test()
+    io::print("first: ");
+    let n1 = io::read();
+    io::print("second: ");
+    let n2 = io::read();
+    let out = add(n1, n2);
+    io::println("first + second = ", out);
 }

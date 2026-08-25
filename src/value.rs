@@ -65,6 +65,10 @@ impl Value {
                     expected_args!(method, 0, args.len());
                     Ok(Value::String(s.to_lowercase()))
                 }
+                // "parse_int" => {
+                //     expected_args!(method, 0, args.len());
+                //     Ok(Value::String(s.to_lowercase()))
+                // }
                 _ => Err(format!("Unknown method '{}' for String", method)),
             },
             Value::Int(i) => match method {

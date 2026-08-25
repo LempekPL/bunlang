@@ -1,18 +1,19 @@
-use std::collections::HashMap;
-use crate::interpreter::ControlFlow;
 use crate::value::Value;
+use std::collections::HashMap;
 
 #[derive(Debug)]
 pub struct Environment {
     pub vars: HashMap<String, Value>,
     pub parent: Option<Box<Environment>>,
+    pub module_path: String,
 }
 
 impl Environment {
-    pub fn new(parent: Option<Environment>) -> Self {
+    pub fn new(parent: Option<Environment>, module_path: String) -> Self {
         Self {
             vars: HashMap::new(),
             parent: parent.map(Box::new),
+            module_path,
         }
     }
 

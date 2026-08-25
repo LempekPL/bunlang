@@ -32,14 +32,14 @@ impl<'src> Interpreter<'src> {
     }
 
     pub fn run(&mut self) -> Result<(), BunError<'src>> {
-        let mut global_env = Environment::new(None);
+        let mut global_env = Environment::new(None, String::new());
 
         global_env.define("io::println", Value::Native(bun_println));
         global_env.define("io::print", Value::Native(bun_print));
         global_env.define("io::read", Value::Native(bun_read));
 
         for item in self.items.values() {
-            if let ItemKind::Use { path, alias } = &item.value {
+            if let ItemKind::Use { is_pub, path, alias } = &item.value {
                 let target = path.join("::");
                 let prefix_module = format!("{}::", target);
                 let bindings = global_env.get_all();
@@ -75,8 +75,6 @@ impl<'src> Interpreter<'src> {
                 }
             }
         }
-
-        dbg!(&global_env);
 
         let Some(Item {
             value: ItemKind::FnDeclare { block, .. },
@@ -264,15 +262,13 @@ impl<'src> Interpreter<'src> {
                     .into())
                 }
             }
-            ExprKind::Block { stmts } => {
-                self.in_block_scope(env, |block_env| {
-                    let mut last_val = Value::Unit;
-                    for stmt in stmts {
-                        last_val = self.eval_stmt(stmt, block_env)?;
-                    }
-                    Ok(last_val)
-                })
-            }
+            ExprKind::Block { stmts } => self.in_block_scope(env, |block_env| {
+                let mut last_val = Value::Unit;
+                for stmt in stmts {
+                    last_val = self.eval_stmt(stmt, block_env)?;
+                }
+                Ok(last_val)
+            }),
             ExprKind::Call { path, args } => {
                 let func_name = path.join("::");
                 let mut evaluated_args = Vec::new();
@@ -291,9 +287,27 @@ impl<'src> Interpreter<'src> {
                         });
                     }
                 }
-                if let Some(func_item) = self.items.get(path.last().unwrap()) {
+                if let Some(func_item) = self.items.get(&func_name) {
                     match &func_item.value {
-                        ItemKind::FnDeclare { inputs, block, .. } => {
+                        ItemKind::FnDeclare {
+                            is_pub,
+                            inputs,
+                            block,
+                            ..
+                        } => {
+                            let target_module = if let Some(last_idx) = func_name.rfind("::") {
+                                &func_name[..last_idx]
+                            } else {
+                                ""
+                            };
+                            if !*is_pub && env.module_path != target_module {
+                                return Err(BunError {
+                                    message: format!("Function '{}' is private and cannot be accessed from outside", func_name),
+                                    span: expr.span,
+                                    source: self.code,
+                                }
+                                    .into());
+                            }
                             if evaluated_args.len() != inputs.len() {
                                 return Err(BunError {
                                     message: format!(
@@ -307,7 +321,7 @@ impl<'src> Interpreter<'src> {
                                 }
                                 .into());
                             }
-                            let mut func_env = Environment::new(None);
+                            let mut func_env = Environment::new(None, target_module.to_string());
                             func_env.vars = env.get_top();
                             for (input_name, arg_val) in inputs.iter().zip(evaluated_args) {
                                 func_env.define(input_name, arg_val);
@@ -431,6 +445,9 @@ impl<'src> Interpreter<'src> {
             }
             ExprKind::Break => Err(ControlFlow::Break),
             ExprKind::Continue => Err(ControlFlow::Continue),
+            ExprKind::Return(expr) => {
+                self.eval_expr(expr, env)
+            },
             _ => Err(BunError {
                 message: "Expression not implemented in interpreter yet".to_string(),
                 span: expr.span,
@@ -509,20 +526,20 @@ impl<'src> Interpreter<'src> {
         }
     }
 
-    fn in_block_scope<F>(
-        &self,
-        env: &mut Environment,
-        mut f: F,
-    ) -> Result<Value, ControlFlow<'src>>
+    fn in_block_scope<F>(&self, env: &mut Environment, mut f: F) -> Result<Value, ControlFlow<'src>>
     where
         F: FnMut(&mut Environment) -> Result<Value, ControlFlow<'src>>,
     {
-        let parent_env = std::mem::replace(env, Environment::new(None));
-        let mut block_env = Environment::new(Some(parent_env));
+        let mod_path = env.module_path.clone();
+        let parent_env = std::mem::replace(env, Environment::new(None, "".to_string()));
+        let mut block_env = Environment::new(Some(parent_env), mod_path);
 
         let result = f(&mut block_env);
 
-        *env = block_env.parent.map(|p| *p).unwrap_or(Environment::new(None));
+        *env = block_env
+            .parent
+            .map(|p| *p)
+            .unwrap_or(Environment::new(None, "".to_string()));
         result
     }
 }

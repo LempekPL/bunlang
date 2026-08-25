@@ -1,13 +1,12 @@
 use crate::error::BunError;
 use crate::lexer::{Keyword, Token, TokenKind};
 use crate::location::{Locatable, Span};
-use std::collections::HashMap;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ExprKind {
     Break,
     Continue,
-    Return,
+    Return(Box<Expr>),
     Literal(TokenKind),
     Ident(String),
     Binary {
@@ -63,7 +62,7 @@ pub enum ExprKind {
 
 pub type Expr = Locatable<ExprKind>;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum StmtKind {
     Declare {
         name: String,
@@ -78,28 +77,34 @@ pub enum StmtKind {
 
 pub type Stmt = Locatable<StmtKind>;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ItemKind {
     FnDeclare {
+        is_pub: bool,
         name: String,
         inputs: Vec<String>,
         block: Expr,
     },
     Const {
+        is_pub: bool,
         name: String,
         value: Expr,
     },
     Use {
+        is_pub: bool,
         path: Vec<String>,
         alias: Option<String>,
     },
     ModImport {
+        is_pub: bool,
         name: String,
         path: String,
     },
     Mod {
+        is_pub: bool,
+        name: String,
         items: Vec<Item>,
-    }
+    },
     // StructDeclare {
     //     name: String,
     //     fields: Vec<(String, Type)>,
@@ -170,10 +175,7 @@ impl Precedence {
 }
 
 impl<'src> Parser<'src> {
-    pub fn parse(
-        tokens: Vec<Token>,
-        code: &'src str,
-    ) -> Result<HashMap<String, Item>, BunError<'src>> {
+    pub fn parse(tokens: Vec<Token>, code: &'src str) -> Result<Vec<Item>, BunError<'src>> {
         let mut parser = Self {
             tokens,
             code,
@@ -183,80 +185,100 @@ impl<'src> Parser<'src> {
         parser.parse_items()
     }
 
-    fn parse_items(&mut self) -> Result<HashMap<String, Item>, BunError<'src>> {
-        let mut items = HashMap::new();
-        while let Some(tok) = self.current() {
-            match &tok.value {
-                TokenKind::Keyword(Keyword::Fn) => {
-                    let start = tok.span.start;
-                    self.next_token();
-                    let ident = self.take_ident()?;
-                    self.consume(TokenKind::LeftParen)?;
-                    let mut inputs = Vec::new();
-                    if self.current_inside() != Some(TokenKind::RightParen) {
-                        // todo: implement input types
-                        loop {
-                            inputs.push(self.take_ident()?);
-                            if self.current_inside() == Some(TokenKind::RightParen) {
-                                break;
-                            }
-                            self.consume(TokenKind::Comma)?;
-                            if self.current_inside() == Some(TokenKind::RightParen) {
-                                break;
-                            }
+    fn parse_items(&mut self) -> Result<Vec<Item>, BunError<'src>> {
+        let mut items = Vec::new();
+        while self.current().is_some() && self.current_inside() != Some(TokenKind::RightBrace) {
+            items.push(self.parse_item()?);
+        }
+        Ok(items)
+    }
+
+    fn parse_item(&mut self) -> Result<Item, BunError<'src>> {
+        let mut is_pub = false;
+        if self
+            .current()
+            .is_some_and(|t| t.value == TokenKind::Keyword(Keyword::Pub))
+        {
+            self.next_token();
+            is_pub = true;
+        }
+        let tok = self.current().unwrap().clone();
+        match &tok.value {
+            TokenKind::Keyword(Keyword::Fn) => {
+                let start = tok.span.start;
+                self.next_token();
+                let ident = self.take_ident()?;
+                self.consume(TokenKind::LeftParen)?;
+                let mut inputs = Vec::new();
+                if self.current_inside() != Some(TokenKind::RightParen) {
+                    loop {
+                        inputs.push(self.take_ident()?);
+                        if self.current_inside() == Some(TokenKind::RightParen) {
+                            break;
+                        }
+                        self.consume(TokenKind::Comma)?;
+                        if self.current_inside() == Some(TokenKind::RightParen) {
+                            break;
                         }
                     }
-                    self.consume(TokenKind::RightParen)?;
-                    let stmts = self.parse_stmts()?;
-                    let span = Span::from((start, stmts.span.end));
-                    let fun = ItemKind::FnDeclare {
-                        name: ident.clone(),
-                        inputs,
-                        block: stmts,
-                    };
-                    items.insert(ident, Item::new_span(fun, span));
                 }
-                TokenKind::Keyword(Keyword::Use) => {
-                    let start = tok.span.start;
+                self.consume(TokenKind::RightParen)?;
+                let stmts = self.parse_stmts()?;
+                let span = Span::from((start, stmts.span.end));
+                let fun = ItemKind::FnDeclare {
+                    is_pub,
+                    name: ident,
+                    inputs,
+                    block: stmts,
+                };
+                Ok(Item::new_span(fun, span))
+            }
+            TokenKind::Keyword(Keyword::Use) => {
+                let start = tok.span.start;
+                self.next_token();
+                let mut path = vec![self.take_ident()?];
+                while self.current_inside() == Some(TokenKind::ColonColon) {
                     self.next_token();
-                    let mut path = vec![self.take_ident()?];
-                    while self.current_inside() == Some(TokenKind::ColonColon) {
-                        self.next_token();
-                        path.push(self.take_ident()?);
-                    }
-                    let mut alias = None;
-                    if self.current_inside() == Some(TokenKind::Keyword(Keyword::As)) {
-                        self.next_token();
-                        alias = Some(self.take_ident()?);
-                    }
-                    self.consume(TokenKind::Semicolon)?;
-                    let span = Span::from((start, self.span.end));
+                    path.push(self.take_ident()?);
+                }
+                let mut alias = None;
+                if self.current_inside() == Some(TokenKind::Keyword(Keyword::As)) {
+                    self.next_token();
+                    alias = Some(self.take_ident()?);
+                }
+                self.consume(TokenKind::Semicolon)?;
+                let span = Span::from((start, self.span.end));
 
-                    let use_item = ItemKind::Use { path: path.clone(), alias };
-                    let key = format!("__use_{}", path.join("_"));
-                    items.insert(key, Item::new_span(use_item, span));
-                }
-                TokenKind::Keyword(Keyword::Mod) => {
-                    let start = tok.span.start;
-                    self.next_token();
-                    let mod_name = self.take_ident()?;
+                let use_item = ItemKind::Use {
+                    is_pub,
+                    path,
+                    alias,
+                };
+                Ok(Item::new_span(use_item, span))
+            }
+            TokenKind::Keyword(Keyword::Mod) => {
+                let start = tok.span.start;
+                self.next_token();
+                let mod_name = self.take_ident()?;
+                if self.current_inside() == Some(TokenKind::Keyword(Keyword::Import)) {
                     self.consume(TokenKind::Keyword(Keyword::Import))?;
-                    let path = if let Some(tok) = self.current().cloned() {
-                        match tok.value {
+                    let path = if let Some(t) = self.current().cloned() {
+                        match t.value {
                             TokenKind::String(p) => {
                                 self.next_token();
                                 p
                             }
-                            // TODO: check if '{' then create ItemKind::Mod ...
-                            _ => return Err(BunError {
-                                message: "Expected string literal for module path".to_string(),
-                                span: tok.span,
-                                source: self.code,
-                            })
+                            _ => {
+                                return Err(BunError {
+                                    message: "Expected string literal for module path".into(),
+                                    span: t.span,
+                                    source: self.code,
+                                });
+                            }
                         }
                     } else {
                         return Err(BunError {
-                            message: "Unexpected EOF".to_string(),
+                            message: "Unexpected EOF".into(),
                             span: self.span,
                             source: self.code,
                         });
@@ -264,21 +286,38 @@ impl<'src> Parser<'src> {
 
                     self.consume(TokenKind::Semicolon)?;
                     let span = Span::from((start, self.span.end));
+                    let mod_item = ItemKind::ModImport {
+                        is_pub,
+                        name: mod_name,
+                        path,
+                    };
+                    Ok(Item::new_span(mod_item, span))
+                } else if self.current_inside() == Some(TokenKind::LeftBrace) {
+                    self.consume(TokenKind::LeftBrace)?;
+                    let sub_items = self.parse_items()?;
+                    self.consume(TokenKind::RightBrace)?;
 
-                    let mod_item = ItemKind::ModImport { name: mod_name.clone(), path: path.clone() };
-                    let key = format!("__mod_{}", mod_name);
-                    items.insert(key, Item::new_span(mod_item, span));
-                }
-                other => {
-                    return Err(BunError {
-                        message: format!("Unexpected token '{}'", other),
+                    let span = Span::from((start, self.span.end));
+                    let mod_item = ItemKind::Mod {
+                        is_pub,
+                        name: mod_name,
+                        items: sub_items,
+                    };
+                    Ok(Item::new_span(mod_item, span))
+                } else {
+                    Err(BunError {
+                        message: "Expected '{' or 'import' after module name".into(),
                         span: tok.span,
                         source: self.code,
-                    });
+                    })
                 }
             }
+            other => Err(BunError {
+                message: format!("Unexpected token '{}'", other),
+                span: tok.span,
+                source: self.code,
+            }),
         }
-        Ok(items)
     }
 
     fn parse_stmts(&mut self) -> Result<Expr, BunError<'src>> {
@@ -369,6 +408,14 @@ impl<'src> Parser<'src> {
             TokenKind::Keyword(Keyword::Break) => Ok(Expr::new_span(ExprKind::Break, tok.span)),
             TokenKind::Keyword(Keyword::Continue) => {
                 Ok(Expr::new_span(ExprKind::Continue, tok.span))
+            }
+            TokenKind::Keyword(Keyword::Return) => {
+                let start = tok.span.start;
+                let expr = self.parse_expr(Precedence::None)?;
+                Ok(Expr::new_span(
+                    ExprKind::Return(Box::new(expr.clone())),
+                    Span::from((start, expr.span.end)),
+                ))
             }
             TokenKind::Float(_) | TokenKind::Int(_) | TokenKind::String(_) => Ok(Expr::new_span(
                 ExprKind::Literal(tok.value.clone()),
