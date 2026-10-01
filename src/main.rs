@@ -44,10 +44,18 @@ fn resolve_items(
                 let full_name = format!("{}{}", prefix, name);
                 resolved.insert(full_name, item);
             }
+            ItemKind::EnumDeclare { name, .. } => {
+                let full_name = format!("{}{}", prefix, name);
+                resolved.insert(full_name, item);
+            }
             ItemKind::Use { .. } => {
                 let key = format!("__use_{}_{}", prefix, use_counter);
                 resolved.insert(key, item);
                 use_counter += 1;
+            }
+            ItemKind::StructDeclare { name, .. } => {
+                let full_name = format!("{}{}", prefix, name);
+                resolved.insert(full_name, item);
             }
             _ => {}
         }

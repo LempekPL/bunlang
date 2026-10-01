@@ -39,7 +39,12 @@ impl<'src> Interpreter<'src> {
         global_env.define("io::read", Value::Native(bun_read));
 
         for item in self.items.values() {
-            if let ItemKind::Use { is_pub, path, alias } = &item.value {
+            if let ItemKind::Use {
+                is_pub,
+                path,
+                alias,
+            } = &item.value
+            {
                 let target = path.join("::");
                 let prefix_module = format!("{}::", target);
                 let bindings = global_env.get_all();
@@ -109,6 +114,66 @@ impl<'src> Interpreter<'src> {
                 }
                 .into()
             }),
+            ExprKind::QualifiedIdent(path) => {
+                if path.len() >= 2 {
+                    let variant_name = path.last().unwrap().clone();
+                    let enum_path = path[..path.len() - 1].join("::");
+                    if let Some(item) = self.items.get(&enum_path) {
+                        if let ItemKind::EnumDeclare {
+                            variants, is_pub, ..
+                        } = &item.value
+                        {
+                            let target_module = if let Some(last_idx) = enum_path.rfind("::") {
+                                &enum_path[..last_idx]
+                            } else {
+                                ""
+                            };
+                            if !*is_pub && env.module_path != target_module {
+                                return Err(BunError {
+                                    message: format!("Enum '{}' is private", enum_path),
+                                    span: expr.span,
+                                    source: self.code,
+                                }
+                                .into());
+                            }
+
+                            if let Some(expected_args) = variants.get(&variant_name) {
+                                if !expected_args.is_empty() {
+                                    return Err(BunError {
+                                        message: format!(
+                                            "Enum variant '{}::{}' expects {} arguments, got 0",
+                                            enum_path,
+                                            variant_name,
+                                            expected_args.len()
+                                        ),
+                                        span: expr.span,
+                                        source: self.code,
+                                    }
+                                    .into());
+                                }
+                                return Ok(Value::Enum(enum_path, variant_name, vec![]));
+                            } else {
+                                return Err(BunError {
+                                    message: format!(
+                                        "Variant '{}' not found in enum '{}'",
+                                        variant_name, enum_path
+                                    ),
+                                    span: expr.span,
+                                    source: self.code,
+                                }
+                                .into());
+                            }
+                        }
+                    }
+                }
+
+                Err(BunError {
+                    message: format!("Unknown identifier '{}'", path.join("::")),
+                    span: expr.span,
+                    source: self.code,
+                }
+                .into())
+            }
             ExprKind::Unary {
                 op,
                 expr: inner_expr,
@@ -332,8 +397,51 @@ impl<'src> Interpreter<'src> {
                     };
                 }
 
+                if path.len() >= 2 {
+                    let variant_name = path.last().unwrap().clone();
+                    let enum_path = path[..path.len() - 1].join("::");
+
+                    if let Some(item) = self.items.get(&enum_path) {
+                        if let ItemKind::EnumDeclare {
+                            variants, is_pub, ..
+                        } = &item.value
+                        {
+                            let target_module = if let Some(last_idx) = enum_path.rfind("::") {
+                                &enum_path[..last_idx]
+                            } else {
+                                ""
+                            };
+                            if !*is_pub && env.module_path != target_module {
+                                return Err(BunError {
+                                    message: format!("Enum '{}' is private", enum_path),
+                                    span: expr.span,
+                                    source: self.code,
+                                }
+                                .into());
+                            }
+
+                            if let Some(expected_args) = variants.get(&variant_name) {
+                                if evaluated_args.len() != expected_args.len() {
+                                    return Err(BunError {
+                                        message: format!(
+                                            "Enum variant '{}::{}' expects {} arguments, but got {}",
+                                            enum_path,
+                                            variant_name,
+                                            expected_args.len(),
+                                            evaluated_args.len()
+                                        ),
+                                        span: expr.span,
+                                        source: self.code,
+                                    }.into());
+                                }
+                                return Ok(Value::Enum(enum_path, variant_name, evaluated_args));
+                            }
+                        }
+                    }
+                }
+
                 Err(BunError {
-                    message: format!("Unknown function '{}'", func_name),
+                    message: format!("Unknown function or enum '{}'", func_name),
                     span: expr.span,
                     source: self.code,
                 }
@@ -443,11 +551,81 @@ impl<'src> Interpreter<'src> {
                         .into()
                     })
             }
+            ExprKind::StructInit { name, fields } => {
+                if let Some(item) = self.items.get(name) {
+                    if let ItemKind::StructDeclare {
+                        fields: declared_fields,
+                        is_pub,
+                        ..
+                    } = &item.value
+                    {
+                        let mut struct_fields = HashMap::new();
+                        for (field_name, field_expr) in fields {
+                            if !declared_fields.contains(field_name) {
+                                return Err(BunError {
+                                    message: format!(
+                                        "Struct '{}' has no field '{}'",
+                                        name, field_name
+                                    ),
+                                    span: expr.span,
+                                    source: self.code,
+                                }
+                                .into());
+                            }
+                            let val = self.eval_expr(field_expr, env)?;
+                            struct_fields.insert(field_name.clone(), val);
+                        }
+                        for req_field in declared_fields {
+                            if !struct_fields.contains_key(req_field) {
+                                return Err(BunError {
+                                    message: format!(
+                                        "Missing field '{}' in initialization of struct '{}'",
+                                        req_field, name
+                                    ),
+                                    span: expr.span,
+                                    source: self.code,
+                                }
+                                .into());
+                            }
+                        }
+                        return Ok(Value::Struct(name.clone(), struct_fields));
+                    }
+                }
+                Err(BunError {
+                    message: format!("Unknown struct '{}'", name),
+                    span: expr.span,
+                    source: self.code,
+                }
+                .into())
+            }
+            ExprKind::FieldAccess {
+                expr: inner_expr,
+                field,
+            } => {
+                let inner_val = self.eval_expr(inner_expr, env)?;
+                if let Value::Struct(struct_name, fields) = inner_val {
+                    if let Some(val) = fields.get(field) {
+                        Ok(val.clone())
+                    } else {
+                        Err(BunError {
+                            message: format!("Struct '{}' has no field '{}'", struct_name, field),
+                            span: expr.span,
+                            source: self.code,
+                        }
+                        .into())
+                    }
+                } else {
+                    Err(BunError {
+                        message: format!("Type '{}' has no fields", inner_val.get_type_name()),
+                        span: expr.span,
+                        source: self.code,
+                    }
+                    .into())
+                }
+            }
             ExprKind::Break => Err(ControlFlow::Break),
             ExprKind::Continue => Err(ControlFlow::Continue),
-            ExprKind::Return(expr) => {
-                self.eval_expr(expr, env)
-            },
+            ExprKind::Return(expr) => self.eval_expr(expr, env),
             _ => Err(BunError {
                 message: "Expression not implemented in interpreter yet".to_string(),
                 span: expr.span,

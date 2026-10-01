@@ -1,14 +1,25 @@
+enum Option {
+    None,
+    Some(value)
+}
 
+mod lol {
+    pub fn test() {
+        io::println(Option::Some(40));
+    }
+}
+
+use lol;
 
 fn add(a, b) {
     return a + b;
 }
 
 fn main() {
-    io::print("first: ");
-    let n1 = io::read();
-    io::print("second: ");
-    let n2 = io::read();
-    let out = add(n1, n2);
-    io::println("first + second = ", out);
+    test();
+    let none = Option::None;
+    io::println(none);
+
+    let some = Option::Some(42);
+    io::println(some);
 }

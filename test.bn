@@ -1,3 +1,13 @@
-pub fn lolek() {
-    io::println("lokikoniczynka");
+enum Option {
+    Some(x),
+    None,
+}
+
+struct Point { x, y }
+
+fn main() {
+    let pt = Point { x: 10, y: Option::Some(30) };
+    io::println("Wspolrzedna X: ", pt.x);
+    pt.y = 10;
+    io::println("Wspolrzedna Y: ", pt.y);
 }

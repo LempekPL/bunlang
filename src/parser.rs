@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use crate::error::BunError;
 use crate::lexer::{Keyword, Token, TokenKind};
 use crate::location::{Locatable, Span};
@@ -105,10 +106,16 @@ pub enum ItemKind {
         name: String,
         items: Vec<Item>,
     },
-    // StructDeclare {
-    //     name: String,
-    //     fields: Vec<(String, Type)>,
-    // },
+    EnumDeclare {
+        is_pub: bool,
+        name: String,
+        variants: HashMap<String, Vec<String>>,
+    },
+    StructDeclare {
+        is_pub: bool,
+        name: String,
+        fields: Vec<String>,
+    },
     // Impl {
     //     target: String,
     //     items: Vec<Item>,
@@ -312,6 +319,62 @@ impl<'src> Parser<'src> {
                     })
                 }
             }
+            TokenKind::Keyword(Keyword::Enum) => {
+                let start = tok.span.start;
+                self.next_token();
+                let name = self.take_ident()?;
+                self.consume(TokenKind::LeftBrace)?;
+                let mut variants = HashMap::new();
+                while self.current_inside() != Some(TokenKind::RightBrace) && self.current().is_some() {
+                    let variant_name = self.take_ident()?;
+                    let mut args = Vec::new();
+                    if self.current_inside() == Some(TokenKind::LeftParen) {
+                        self.consume(TokenKind::LeftParen)?;
+                        if self.current_inside() != Some(TokenKind::RightParen) {
+                            loop {
+                                args.push(self.take_ident()?);
+                                if self.current_inside() == Some(TokenKind::RightParen) { break; }
+                                self.consume(TokenKind::Comma)?;
+                                if self.current_inside() == Some(TokenKind::RightParen) { break; }
+                            }
+                        }
+                        self.consume(TokenKind::RightParen)?;
+                    }
+                    variants.insert(variant_name, args);
+                    if self.current_inside() == Some(TokenKind::Comma) {
+                        self.consume(TokenKind::Comma)?;
+                    }
+                }
+                self.consume(TokenKind::RightBrace)?;
+                let span = Span::from((start, self.span.end));
+                Ok(Item::new_span(ItemKind::EnumDeclare {
+                    is_pub,
+                    name,
+                    variants,
+                }, span))
+            }
+            TokenKind::Keyword(Keyword::Struct) => {
+                let start = tok.span.start;
+                self.next_token();
+                let name = self.take_ident()?;
+
+                self.consume(TokenKind::LeftBrace)?;
+                let mut fields = Vec::new();
+
+                if self.current_inside() != Some(TokenKind::RightBrace) {
+                    loop {
+                        fields.push(self.take_ident()?);
+                        if self.current_inside() == Some(TokenKind::RightBrace) { break; }
+                        self.consume(TokenKind::Comma)?;
+                        if self.current_inside() == Some(TokenKind::RightBrace) { break; }
+                    }
+                }
+
+                self.consume(TokenKind::RightBrace)?;
+                let span = Span::from((start, self.span.end));
+
+                Ok(Item::new_span(ItemKind::StructDeclare { is_pub, name, fields }, span))
+            }
             other => Err(BunError {
                 message: format!("Unexpected token '{}'", other),
                 span: tok.span,
@@ -423,12 +486,32 @@ impl<'src> Parser<'src> {
             )),
             TokenKind::Ident(name) => {
                 let mut path = vec![name.clone()];
-                while self
-                    .current()
-                    .is_some_and(|t| t.value == TokenKind::ColonColon)
-                {
+                while self.current().is_some_and(|t| t.value == TokenKind::ColonColon) {
                     self.next_token();
                     path.push(self.take_ident()?);
+                }
+                if path.len() == 1 && self.current_inside() == Some(TokenKind::LeftBrace) {
+                    self.next_token();
+                    let mut fields = Vec::new();
+
+                    if self.current_inside() != Some(TokenKind::RightBrace) {
+                        loop {
+                            let field_name = self.take_ident()?;
+                            self.consume(TokenKind::Colon)?;
+                            let field_val = self.parse_expr(Precedence::None)?;
+                            fields.push((field_name, Box::new(field_val)));
+
+                            if self.current_inside() == Some(TokenKind::RightBrace) { break; }
+                            self.consume(TokenKind::Comma)?;
+                            if self.current_inside() == Some(TokenKind::RightBrace) { break; }
+                        }
+                    }
+                    self.consume(TokenKind::RightBrace)?;
+                    let span = Span::from((tok.span.start, self.span.end));
+                    return Ok(Expr::new_span(
+                        ExprKind::StructInit { name: name.clone(), fields },
+                        span,
+                    ));
                 }
                 if path.len() == 1 {
                     Ok(Expr::new_span(ExprKind::Ident(name.clone()), tok.span))

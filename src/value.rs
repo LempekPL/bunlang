@@ -1,4 +1,5 @@
 use std::cmp::Ordering;
+use std::collections::HashMap;
 use std::fmt::Display;
 use std::ops::{Add, Div, Mul, Neg, Not, Rem, Sub};
 
@@ -9,7 +10,8 @@ pub enum Value {
     String(String),
     Bool(bool),
     Range(i64, i64),
-    Struct(Vec<Value>),
+    Struct(String, HashMap<String, Value>),
+    Enum(String, String, Vec<Value>),
     Unit,
     Native(fn(Vec<Value>) -> Result<Value, String>),
 }
@@ -41,7 +43,8 @@ impl Value {
             Value::Bool(_) => "Bool",
             Value::Range(_, _) => "Range",
             Value::Unit => "Unit",
-            Value::Struct(_) => "Struct",
+            Value::Struct(_,_) => "Struct",
+            Value::Enum(_, _, _) => "Enum",
             Value::Native(_) => "<native fn>",
         }
     }
@@ -105,10 +108,18 @@ impl Display for Value {
             Value::Int(v) => write!(f, "{}", v),
             Value::String(v) => write!(f, "{}", v),
             Value::Unit => write!(f, "()"),
-            Value::Struct(_) => write!(f, "()"),
+            Value::Struct(name, _) => write!(f, "{} {{ ... }}", name),
             Value::Bool(b) => write!(f, "{}", b),
             Value::Range(start, end) => write!(f, "{}..{}", start, end),
             Value::Native(_) => write!(f, "<native fn>"),
+            Value::Enum(enum_name, variant, args) => {
+                if args.is_empty() {
+                    write!(f, "{}::{}", enum_name, variant)
+                } else {
+                    let formatted_args: Vec<String> = args.iter().map(|a| format!("{}", a)).collect();
+                    write!(f, "{}::{}({})", enum_name, variant, formatted_args.join(", "))
+                }
+            }
         }
     }
 }
